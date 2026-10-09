@@ -13,6 +13,7 @@ from .routers.kb import router as kb_router
 from .sse import router as sse_router
 from .analytics_router import router as analytics_router
 from .auth import AuthMiddleware
+from .jwt_auth import router as auth_router
 
 
 @asynccontextmanager
@@ -40,6 +41,7 @@ app.include_router(agent_router)
 app.include_router(kb_router)
 app.include_router(sse_router)
 app.include_router(analytics_router)
+app.include_router(auth_router)
 
 # Static files
 static_dir = Path(__file__).resolve().parent / "static"

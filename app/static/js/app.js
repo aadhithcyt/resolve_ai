@@ -30,6 +30,8 @@ function render() {
         case 'dashboard': loadDashboard(); break;
         case 'tickets': loadTickets(); break;
         case 'customers': loadCustomers(); break;
+        case 'knowledge': loadKnowledge(); break;
+        case 'analytics': loadAnalytics(); break;
     }
 }
 
@@ -310,6 +312,151 @@ async function showTicketDetail(ticketId) {
                             ${ticket.resolved_at ? `<p><strong>Resolved:</strong> ${formatDate(ticket.resolved_at)}</p>` : ''}
                         </div>
                     </div>
+                </div>
+            </div>
+        `;
+    } catch (e) {
+        main.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><p>Error: ${esc(e.message)}</p></div>`;
+    }
+}
+
+// Knowledge Base
+async function loadKnowledge() {
+    const main = document.getElementById('main-content');
+    main.innerHTML = '<div class="loading"></div>';
+    try {
+        const articles = await api('/api/kb/');
+        main.innerHTML = `
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Knowledge Base (${articles.length})</span>
+                    <button class="btn btn-primary btn-sm" onclick="showNewKBModal()">+ Add Article</button>
+                </div>
+                <div class="card-body">
+                    <div class="filters">
+                        <input type="text" class="form-input" id="kb-search" placeholder="Search knowledge base..." style="flex:1" onkeyup="debounceKBSearch()">
+                    </div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead><tr><th>ID</th><th>Title</th><th>Category</th><th>Tags</th><th>Actions</th></tr></thead>
+                            <tbody>
+                                ${articles.map(a => `
+                                    <tr>
+                                        <td>#${a.id}</td>
+                                        <td>${esc(a.title)}</td>
+                                        <td><span class="badge badge-medium">${esc(a.category)}</span></td>
+                                        <td>${esc(a.tags || '-')}</td>
+                                        <td>
+                                            <button class="btn btn-sm" onclick="showKBDetail(${a.id})">View</button>
+                                            <button class="btn btn-sm btn-danger" onclick="deleteKB(${a.id})">Delete</button>
+                                        </td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                        ${articles.length === 0 ? '<div class="empty-state"><div class="icon">📚</div><p>No knowledge base articles yet.</p></div>' : ''}
+                    </div>
+                </div>
+            </div>
+        `;
+    } catch (e) {
+        main.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><p>Error: ${esc(e.message)}</p></div>`;
+    }
+}
+
+function debounceKBSearch() {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(async () => {
+        const q = document.getElementById('kb-search')?.value || '';
+        if (!q) { loadKnowledge(); return; }
+        const main = document.getElementById('main-content');
+        try {
+            const result = await api('/api/kb/search?query=' + encodeURIComponent(q));
+            const tbody = main.querySelector('tbody');
+            if (tbody) {
+                tbody.innerHTML = result.results.map(a => `
+                    <tr>
+                        <td>#${a.id}</td>
+                        <td>${esc(a.title)}</td>
+                        <td><span class="badge badge-medium">${esc(a.category)}</span></td>
+                        <td>${esc(a.tags || '-')}</td>
+                        <td>
+                            <button class="btn btn-sm" onclick="showKBDetail(${a.id})">View</button>
+                            <button class="btn btn-sm btn-danger" onclick="deleteKB(${a.id})">Delete</button>
+                        </td>
+                    </tr>
+                `).join('');
+            }
+        } catch (e) { /* ignore */ }
+    }, 300);
+}
+
+function showNewKBModal() {
+    showModal('New Knowledge Article', `
+        <div class="form-group"><label class="form-label">Title *</label><input type="text" class="form-input" id="kb-title"></div>
+        <div class="form-group"><label class="form-label">Content *</label><textarea class="form-textarea" id="kb-content" placeholder="Article content, FAQ, or solution..."></textarea></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            <div class="form-group"><label class="form-label">Category</label><input type="text" class="form-input" id="kb-category" value="general"></div>
+            <div class="form-group"><label class="form-label">Tags</label><input type="text" class="form-input" id="kb-tags" placeholder="comma,separated"></div>
+        </div>
+    `, `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="createKB()">Create</button>`);
+}
+
+async function createKB() {
+    const data = {
+        title: document.getElementById('kb-title').value,
+        content: document.getElementById('kb-content').value,
+        category: document.getElementById('kb-category').value || 'general',
+        tags: document.getElementById('kb-tags').value || null,
+    };
+    if (!data.title || !data.content) { showToast('Title and content required', 'error'); return; }
+    try {
+        await api('/api/kb/', { method: 'POST', body: JSON.stringify(data) });
+        closeModal(); showToast('Article created'); loadKnowledge();
+    } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function showKBDetail(id) {
+    const a = await api(`/api/kb/${id}`);
+    showModal(esc(a.title), `<p style="white-space:pre-wrap">${esc(a.content)}</p><p style="margin-top:12px;color:var(--text2);font-size:0.75rem">Category: ${esc(a.category)} | Tags: ${esc(a.tags || '-')}</p>`);
+}
+
+async function deleteKB(id) {
+    if (!confirm('Delete this article?')) return;
+    try { await api(`/api/kb/${id}`, { method: 'DELETE' }); showToast('Deleted'); loadKnowledge(); }
+    catch (e) { showToast(e.message, 'error'); }
+}
+
+// Analytics
+async function loadAnalytics() {
+    const main = document.getElementById('main-content');
+    main.innerHTML = '<div class="loading"></div>';
+    try {
+        const stats = await api('/api/analytics/ai');
+        main.innerHTML = `
+            <div class="stats-grid">
+                <div class="stat-card"><div class="label">Total AI Replies</div><div class="value">${stats.total_ai_replies}</div></div>
+                <div class="stat-card"><div class="label">Accepted</div><div class="value resolved">${stats.accepted_replies}</div></div>
+                <div class="stat-card"><div class="label">Acceptance Rate</div><div class="value">${stats.acceptance_rate}%</div></div>
+                <div class="stat-card"><div class="label">Avg Tool Calls</div><div class="value">${stats.avg_tool_calls}</div></div>
+            </div>
+            <div class="card">
+                <div class="card-header"><span class="card-title">Tool Usage</span></div>
+                <div class="card-body">
+                    ${Object.entries(stats.tool_usage).map(([tool, count]) => `
+                        <p><strong>${esc(tool)}:</strong> ${count} calls</p>
+                    `).join('') || '<p>No tool usage data yet.</p>'}
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header"><span class="card-title">Recent AI Activity</span></div>
+                <div class="card-body">
+                    ${stats.recent_activity.map(a => `
+                        <div class="message message-ai">
+                            <div class="message-meta">Ticket #${a.ticket_id} — ${a.tool_calls_made} tool calls — ${formatDate(a.created_at)}</div>
+                            ${esc(a.reply_text.substring(0, 150))}...
+                        </div>
+                    `).join('') || '<p>No AI activity yet.</p>'}
                 </div>
             </div>
         `;
