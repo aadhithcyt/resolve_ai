@@ -17,6 +17,8 @@ from .jwt_auth import router as auth_router
 from .portal import router as portal_router
 from .webhook import router as webhook_router
 from .import_export import router as import_export_router
+from .routers.sla_report import router as sla_report_router
+from .team import router as team_router
 from .attachments import router as attachments_router
 
 
@@ -51,6 +53,8 @@ app.include_router(portal_router)
 app.include_router(webhook_router)
 app.include_router(import_export_router)
 app.include_router(attachments_router)
+app.include_router(sla_report_router)
+app.include_router(team_router)
 
 # Static files
 static_dir = Path(__file__).resolve().parent / "static"
