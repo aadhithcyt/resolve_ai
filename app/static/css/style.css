@@ -108,6 +108,7 @@ body {
 .stat-card .value.in-progress { color: var(--warning); }
 .stat-card .value.resolved { color: var(--success); }
 .stat-card .value.closed { color: var(--text2); }
+.stat-card .value.sla-breached { color: var(--danger); }
 
 /* Cards */
 .card {
@@ -154,6 +155,8 @@ th {
 }
 
 tr:hover td { background: var(--surface2); }
+tr.sla-breached-row td { background: rgba(239,68,68,0.06); }
+tr.sla-breached-row:hover td { background: rgba(239,68,68,0.1); }
 
 /* Badges */
 .badge {
@@ -177,6 +180,7 @@ tr:hover td { background: var(--surface2); }
 .badge-positive { background: rgba(34,197,94,0.15); color: var(--success); }
 .badge-neutral { background: rgba(156,163,175,0.15); color: var(--text2); }
 .badge-negative { background: rgba(239,68,68,0.15); color: var(--danger); }
+.badge-sla-breached { background: rgba(239,68,68,0.25); color: var(--danger); font-weight: 600; }
 
 /* Buttons */
 .btn {

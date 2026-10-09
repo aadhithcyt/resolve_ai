@@ -88,6 +88,10 @@ async function loadDashboard() {
                     <div class="label">Avg Resolution</div>
                     <div class="value">${stats.avg_resolution_hours ? stats.avg_resolution_hours + 'h' : 'N/A'}</div>
                 </div>
+                <div class="stat-card">
+                    <div class="label">SLA Breached</div>
+                    <div class="value sla-breached">${stats.sla_breached || 0}</div>
+                </div>
             </div>
             <div class="card">
                 <div class="card-header">
@@ -137,6 +141,7 @@ async function loadTickets(filters = {}) {
         if (filters.status) params.set('status', filters.status);
         if (filters.priority) params.set('priority', filters.priority);
         if (filters.search) params.set('search', filters.search);
+        if (filters.sla_breached) params.set('sla_breached', filters.sla_breached);
 
         tickets = await api('/api/tickets/?' + params.toString());
         main.innerHTML = `
@@ -161,6 +166,11 @@ async function loadTickets(filters = {}) {
                             <option value="high">High</option>
                             <option value="urgent">Urgent</option>
                         </select>
+                        <select class="form-select" id="filter-sla" onchange="applyFilters()">
+                            <option value="">All SLA</option>
+                            <option value="true">SLA Breached</option>
+                            <option value="false">SLA On Track</option>
+                        </select>
                         <input type="text" class="form-input" id="filter-search" placeholder="Search tickets..." style="flex:1" onkeyup="debounceApplyFilters()">
                     </div>
                     <div class="table-wrap">
@@ -180,7 +190,7 @@ async function loadTickets(filters = {}) {
                             </thead>
                             <tbody>
                                 ${tickets.map(t => `
-                                    <tr>
+                                    <tr class="${t.sla_breached ? 'sla-breached-row' : ''}">
                                         <td>#${t.id}</td>
                                         <td><a href="#" onclick="showTicketDetail(${t.id}); return false;">${esc(t.subject)}</a></td>
                                         <td>${esc(t.customer_name || '')}</td>
@@ -188,6 +198,7 @@ async function loadTickets(filters = {}) {
                                         <td><span class="badge badge-${t.priority}">${t.priority}</span></td>
                                         <td>${esc(t.category)}</td>
                                         <td>${t.sentiment ? `<span class="badge badge-${t.sentiment}">${t.sentiment}</span>` : '-'}</td>
+                                        <td>${t.sla_breached ? '<span class="badge badge-sla-breached">SLA BREACHED</span>' : ''}</td>
                                         <td>${formatDate(t.created_at)}</td>
                                         <td>
                                             <button class="btn btn-sm" onclick="showTicketDetail(${t.id})">View</button>
@@ -211,7 +222,8 @@ function applyFilters() {
     const status = document.getElementById('filter-status')?.value || '';
     const priority = document.getElementById('filter-priority')?.value || '';
     const search = document.getElementById('filter-search')?.value || '';
-    loadTickets({ status, priority, search });
+    const sla = document.getElementById('filter-sla')?.value || '';
+    loadTickets({ status, priority, search, sla_breached: sla });
 }
 
 let debounceTimer;
@@ -289,6 +301,9 @@ async function showTicketDetail(ticketId) {
                             <p><strong>Category:</strong> ${esc(ticket.category)}</p>
                             <p><strong>Sentiment:</strong> ${ticket.sentiment ? `<span class="badge badge-${ticket.sentiment}">${ticket.sentiment}</span>` : '-'}</p>
                             <p><strong>Assigned:</strong> ${esc(ticket.assigned_to || 'Unassigned')}</p>
+                            <hr style="border-color:var(--border);margin:12px 0">
+                            <p><strong>SLA Due:</strong> ${ticket.sla_due_at ? formatDate(ticket.sla_due_at) : '-'}</p>
+                            <p><strong>SLA Status:</strong> ${ticket.sla_breached ? '<span class="badge badge-sla-breached">BREACHED</span>' : '<span class="badge badge-resolved">On Track</span>'}</p>
                             <hr style="border-color:var(--border);margin:12px 0">
                             <p><strong>Created:</strong> ${formatDate(ticket.created_at)}</p>
                             <p><strong>Updated:</strong> ${formatDate(ticket.updated_at)}</p>
