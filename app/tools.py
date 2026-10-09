@@ -115,12 +115,21 @@ async def get_ticket_info(ticket_id: int) -> dict:
         row = await cursor.fetchone()
         if not row:
             return {"error": f"Ticket {ticket_id} not found"}
-        return dict(row)
+        result = dict(row)
+
+        # Include attachments
+        cursor2 = await db.execute(
+            "SELECT id, filename, content_type, uploaded_at FROM attachments WHERE ticket_id = ? ORDER BY uploaded_at DESC",
+            (ticket_id,),
+        )
+        result["attachments"] = [dict(r) for r in await cursor2.fetchall()]
+        return result
 
 
 async def get_customer_info(customer_id: int) -> dict:
-    """Get customer details and ticket history."""
+    """Get customer details, ticket history, and conversation summaries."""
     from .database import get_db
+    from .memory import get_conversation_context
     async with get_db() as db:
         cursor = await db.execute("SELECT * FROM customers WHERE id = ?", (customer_id,))
         customer = await cursor.fetchone()
@@ -134,8 +143,32 @@ async def get_customer_info(customer_id: int) -> dict:
         )
         tickets = [dict(r) for r in await cursor2.fetchall()]
 
+        # Get conversation context (last 5 tickets with messages)
+        conversation_context = await get_conversation_context(customer_id)
+
+        # Build conversation summaries
+        conversation_summaries = []
+        for ticket in conversation_context:
+            summary = {
+                "ticket_id": ticket["id"],
+                "subject": ticket["subject"],
+                "status": ticket["status"],
+                "priority": ticket["priority"],
+                "message_count": len(ticket.get("messages", [])),
+                "last_message": None,
+            }
+            if ticket.get("messages"):
+                last_msg = ticket["messages"][-1]
+                summary["last_message"] = {
+                    "sender": last_msg["sender"],
+                    "content": last_msg["content"][:200],
+                    "is_ai_generated": last_msg["is_ai_generated"],
+                }
+            conversation_summaries.append(summary)
+
         result = dict(customer)
         result["recent_tickets"] = tickets
+        result["conversation_summaries"] = conversation_summaries
         return result
 
 

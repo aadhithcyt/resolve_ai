@@ -245,6 +245,7 @@ async function showTicketDetail(ticketId) {
         ]);
 
         const customer = await api(`/api/customers/${ticket.customer_id}`).catch(() => null);
+        const attachments = await api(`/api/tickets/${ticketId}/attachments`).catch(() => []);
 
         main.innerHTML = `
             <button class="btn btn-sm" onclick="loadTickets()" style="margin-bottom:16px">← Back to Tickets</button>
@@ -255,6 +256,7 @@ async function showTicketDetail(ticketId) {
                             <span class="card-title">#${ticket.id} — ${esc(ticket.subject)}</span>
                             <div>
                                 <button class="btn btn-sm btn-primary" onclick="showAIModal(${ticket.id})">🤖 AI Reply</button>
+                                <button class="btn btn-sm btn-accent" onclick="showAgentStreamingModal(${ticket.id})">🧠 AI Agent</button>
                                 <button class="btn btn-sm" onclick="showEditTicketModal(${ticket.id})">Edit</button>
                             </div>
                         </div>
@@ -286,6 +288,31 @@ async function showTicketDetail(ticketId) {
                                     <textarea class="form-textarea" id="reply-content" placeholder="Type your reply..."></textarea>
                                 </div>
                                 <button class="btn btn-primary" onclick="sendReply(${ticket.id})">Send Reply</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">Attachments (${attachments.length})</span>
+                        </div>
+                        <div class="card-body">
+                            ${attachments.length > 0 ? `
+                                <div class="attachment-list">
+                                    ${attachments.map(a => `
+                                        <div class="attachment-item">
+                                            <span class="attachment-icon">📎</span>
+                                            <a href="/api/attachments/${a.id}/download" class="attachment-name" download="${esc(a.filename)}">${esc(a.filename)}</a>
+                                            <span class="attachment-meta">${esc(a.content_type || 'unknown')} — ${formatDate(a.uploaded_at)}</span>
+                                            <button class="btn btn-sm btn-danger" onclick="deleteAttachment(${a.id}, ${ticket.id})">Delete</button>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            ` : '<p style="color:var(--text2)">No attachments yet.</p>'}
+                            <hr style="border-color:var(--border);margin:12px 0">
+                            <div class="form-group">
+                                <label class="form-label">Upload Attachment</label>
+                                <input type="file" class="form-input" id="attachment-file" style="margin-bottom:8px">
+                                <button class="btn btn-sm btn-primary" onclick="uploadAttachment(${ticket.id})">Upload File</button>
                             </div>
                         </div>
                     </div>
@@ -713,6 +740,185 @@ async function generateAIReply(ticketId) {
     }
 }
 
+// AI Agent Streaming Modal
+function showAgentStreamingModal(ticketId) {
+    showModal('AI Agent — Live', `
+        <div id="agent-stream-container">
+            <div id="agent-status" class="agent-status">
+                <span class="typing-indicator">
+                    <span class="dot"></span>
+                    <span class="dot"></span>
+                    <span class="dot"></span>
+                </span>
+                <span class="status-text">Connecting to AI agent...</span>
+            </div>
+            <div id="agent-tool-calls"></div>
+            <div id="agent-reply-container" style="display:none">
+                <div class="label">AI Agent Reply</div>
+                <div id="agent-reply-content" class="agent-reply-content"></div>
+                <div id="agent-reply-cursor" class="reply-cursor">|</div>
+            </div>
+            <div id="agent-done-actions" style="display:none;margin-top:16px;display:flex;gap:8px">
+                <button class="btn btn-sm btn-primary" onclick="useAgentStreamingReply(${ticketId})">Use This Reply</button>
+                <button class="btn btn-sm" onclick="closeModal()">Close</button>
+            </div>
+        </div>
+    `, '');
+
+    // Start streaming
+    startAgentStream(ticketId);
+}
+
+async function startAgentStream(ticketId) {
+    const statusEl = document.getElementById('agent-status');
+    const toolCallsEl = document.getElementById('agent-tool-calls');
+    const replyContainer = document.getElementById('agent-reply-content');
+    const replyWrapper = document.getElementById('agent-reply-container');
+    const doneActions = document.getElementById('agent-done-actions');
+    const cursor = document.getElementById('agent-reply-cursor');
+
+    let fullReply = '';
+    let eventSource = null;
+
+    try {
+        const response = await fetch('/api/ai/agent/stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ticket_id: ticketId }),
+        });
+
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({ detail: 'Stream failed' }));
+            throw new Error(err.detail || 'Stream request failed');
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop(); // Keep incomplete line in buffer
+
+            for (const line of lines) {
+                if (line.startsWith('event: ')) {
+                    const eventType = line.substring(7).trim();
+                    // Read the next line for data
+                    const dataLine = lines[lines.indexOf(line) + 1];
+                    if (dataLine && dataLine.startsWith('data: ')) {
+                        const dataStr = dataLine.substring(6);
+                        try {
+                            const data = JSON.parse(dataStr);
+                            handleAgentEvent(eventType, data, {
+                                statusEl,
+                                toolCallsEl,
+                                replyContainer,
+                                replyWrapper,
+                                doneActions,
+                                cursor,
+                                ticketId,
+                                setFullReply: (val) => { fullReply = val; },
+                                getFullReply: () => fullReply,
+                            });
+                        } catch (e) {
+                            // Skip malformed JSON
+                        }
+                    }
+                }
+            }
+        }
+    } catch (e) {
+        statusEl.innerHTML = `<span style="color:var(--danger)">Error: ${esc(e.message)}</span>`;
+    }
+}
+
+function handleAgentEvent(eventType, data, ctx) {
+    const { statusEl, toolCallsEl, replyContainer, replyWrapper, doneActions, cursor, ticketId, setFullReply, getFullReply } = ctx;
+
+    switch (eventType) {
+        case 'tool_call':
+            // Show tool call with animation
+            statusEl.innerHTML = '<span class="typing-indicator"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span><span class="status-text">Executing tool: ' + esc(data.tool_name) + '...</span>';
+            const toolCallDiv = document.createElement('div');
+            toolCallDiv.className = 'tool-call-item tool-call-active';
+            toolCallDiv.innerHTML = `
+                <div class="tool-call-header">
+                    <span class="tool-icon">🔧</span>
+                    <span class="tool-name">${esc(data.tool_name)}</span>
+                    <span class="tool-status">Running...</span>
+                </div>
+                <div class="tool-args">${esc(JSON.stringify(data.tool_args, null, 2))}</div>
+            `;
+            toolCallsEl.appendChild(toolCallDiv);
+            // Scroll to bottom
+            toolCallsEl.scrollTop = toolCallsEl.scrollHeight;
+            break;
+
+        case 'tool_result':
+            // Update the last tool call with result
+            const lastToolCall = toolCallsEl.querySelector('.tool-call-active');
+            if (lastToolCall) {
+                lastToolCall.classList.remove('tool-call-active');
+                lastToolCall.classList.add('tool-call-done');
+                const statusSpan = lastToolCall.querySelector('.tool-status');
+                if (statusSpan) statusSpan.textContent = 'Done ✓';
+                const resultDiv = document.createElement('div');
+                resultDiv.className = 'tool-result';
+                resultDiv.innerHTML = '<div class="tool-result-label">Result:</div><pre>' + esc(JSON.stringify(data.result, null, 2)) + '</pre>';
+                lastToolCall.appendChild(resultDiv);
+            }
+            statusEl.innerHTML = '<span class="typing-indicator"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span><span class="status-text">Processing tool result...</span>';
+            break;
+
+        case 'reply_chunk':
+            // Show reply container on first chunk
+            if (replyWrapper.style.display === 'none') {
+                replyWrapper.style.display = 'block';
+                statusEl.innerHTML = '<span class="typing-indicator"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span><span class="status-text">Generating reply...</span>';
+            }
+            // Append chunk with typing effect
+            replyContainer.textContent += data.text;
+            setFullReply(getFullReply() + data.text);
+            // Blink cursor
+            cursor.style.visibility = 'visible';
+            clearTimeout(cursor._blinkTimer);
+            cursor._blinkTimer = setTimeout(() => { cursor.style.visibility = 'hidden'; }, 500);
+            break;
+
+        case 'done':
+            // Finalize
+            statusEl.innerHTML = '<span style="color:var(--success)">✓ Agent completed</span>';
+            cursor.style.display = 'none';
+            doneActions.style.display = 'flex';
+            break;
+
+        case 'error':
+            statusEl.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc(data.error || 'Unknown error') + '</span>';
+            break;
+    }
+}
+
+async function useAgentStreamingReply(ticketId) {
+    const replyContent = document.getElementById('agent-reply-content');
+    const reply = replyContent ? replyContent.textContent : '';
+    if (!reply.trim()) return;
+    try {
+        await api(`/api/tickets/${ticketId}/messages`, {
+            method: 'POST',
+            body: JSON.stringify({ sender: 'agent', content: reply }),
+        });
+        showToast('Reply sent');
+        closeModal();
+        showTicketDetail(ticketId);
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
 async function useAIReply(ticketId) {
     const ticket = await api(`/api/tickets/${ticketId}`);
     if (ticket.ai_reply) {
@@ -734,6 +940,42 @@ async function sendReply(ticketId) {
             body: JSON.stringify({ sender: 'agent', content }),
         });
         showToast('Reply sent');
+        showTicketDetail(ticketId);
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
+async function uploadAttachment(ticketId) {
+    const fileInput = document.getElementById('attachment-file');
+    if (!fileInput.files || fileInput.files.length === 0) {
+        showToast('Please select a file to upload', 'error');
+        return;
+    }
+    const file = fileInput.files[0];
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+        const res = await fetch(`/api/tickets/${ticketId}/attachments`, {
+            method: 'POST',
+            body: formData,
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: res.statusText }));
+            throw new Error(err.detail || 'Upload failed');
+        }
+        showToast('Attachment uploaded');
+        showTicketDetail(ticketId);
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
+async function deleteAttachment(attachmentId, ticketId) {
+    if (!confirm('Delete this attachment?')) return;
+    try {
+        await api(`/api/attachments/${attachmentId}`, { method: 'DELETE' });
+        showToast('Attachment deleted');
         showTicketDetail(ticketId);
     } catch (e) {
         showToast(e.message, 'error');

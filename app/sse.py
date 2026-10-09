@@ -3,9 +3,12 @@ import asyncio
 import json
 import logging
 from typing import AsyncGenerator
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from typing import Optional
 from .database import get_db
+from .agent import run_agent_streaming
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +54,69 @@ async def ticket_events():
             except Exception as e:
                 logger.error(f"SSE error: {e}")
                 await asyncio.sleep(10)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+class AgentStreamRequest(BaseModel):
+    ticket_id: int
+
+
+@router.post("/api/ai/agent/stream")
+async def agent_stream(request: AgentStreamRequest):
+    """SSE endpoint for streaming AI agent output.
+
+    Accepts a ticket_id and returns a stream of events:
+    - tool_call: when the agent decides to call a tool
+    - tool_result: when a tool returns a result
+    - reply_chunk: chunks of the final reply text
+    - done: when the agent completes
+    - error: when an error occurs
+    """
+    # Fetch ticket info
+    async with get_db() as db:
+        ticket = await db.execute(
+            """SELECT t.*, c.name as customer_name
+               FROM tickets t JOIN customers c ON t.customer_id = c.id
+               WHERE t.id = ?""",
+            (request.ticket_id,),
+        )
+        row = await ticket.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Ticket not found")
+        ticket_data = dict(row)
+
+    async def event_generator() -> AsyncGenerator[str, None]:
+        try:
+            async for event in run_agent_streaming(
+                ticket_id=request.ticket_id,
+                subject=ticket_data["subject"],
+                description=ticket_data["description"],
+                customer_name=ticket_data["customer_name"],
+                category=ticket_data["category"],
+            ):
+                event_type = event["type"]
+                data = json.dumps(event["data"])
+                yield f"event: {event_type}\ndata: {data}\n\n"
+        except Exception as e:
+            logger.error(f"Agent stream error: {e}")
+            error_data = json.dumps({"error": str(e)})
+            yield f"event: error\ndata: {error_data}\n\n"
+            done_data = json.dumps({
+                "reply": f"[AI agent failed: {str(e)}]",
+                "tool_calls_made": 0,
+                "tools_used": [],
+                "reasoning": f"Error: {str(e)}",
+            })
+            yield f"event: done\ndata: {done_data}\n\n"
 
     return StreamingResponse(
         event_generator(),

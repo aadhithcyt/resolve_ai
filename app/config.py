@@ -5,6 +5,7 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = os.getenv("RESOLVEAI_DB", str(BASE_DIR / "resolveai.db"))
+UPLOADS_DIR = os.getenv("RESOLVEAI_UPLOADS", str(BASE_DIR / "uploads"))
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = os.getenv("RESOLVEAI_MODEL", "openai/gpt-oss-120b")
 HOST = os.getenv("RESOLVEAI_HOST", "127.0.0.1")

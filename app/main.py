@@ -14,6 +14,10 @@ from .sse import router as sse_router
 from .analytics_router import router as analytics_router
 from .auth import AuthMiddleware
 from .jwt_auth import router as auth_router
+from .portal import router as portal_router
+from .webhook import router as webhook_router
+from .import_export import router as import_export_router
+from .attachments import router as attachments_router
 
 
 @asynccontextmanager
@@ -42,6 +46,11 @@ app.include_router(kb_router)
 app.include_router(sse_router)
 app.include_router(analytics_router)
 app.include_router(auth_router)
+app.include_router(auth_router)
+app.include_router(portal_router)
+app.include_router(webhook_router)
+app.include_router(import_export_router)
+app.include_router(attachments_router)
 
 # Static files
 static_dir = Path(__file__).resolve().parent / "static"
