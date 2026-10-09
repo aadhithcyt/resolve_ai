@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ResolveAI — AI Customer Support Desk</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <a href="/" class="logo">Resolve<span>AI</span></a>
+            <nav class="header-nav">
+                <button class="nav-btn active" data-view="dashboard">Dashboard</button>
+                <button class="nav-btn" data-view="tickets">Tickets</button>
+                <button class="nav-btn" data-view="customers">Customers</button>
+            </nav>
+        </div>
+    </header>
+
+    <main class="main">
+        <div class="container" id="main-content">
+            <div class="loading"></div>
+        </div>
+    </main>
+
+    <div class="modal-overlay" id="modal-overlay"></div>
+    <div class="toast-container" id="toast-container"></div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
