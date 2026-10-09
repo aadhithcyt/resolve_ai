@@ -10,7 +10,12 @@ from .database import get_db
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 
-JWT_SECRET_KEY = os.getenv("RESOLVEAI_JWT_SECRET", "resolveai-jwt-secret-change-in-production")
+JWT_SECRET_KEY = os.getenv("RESOLVEAI_JWT_SECRET", "")
+if not JWT_SECRET_KEY:
+    import secrets
+    JWT_SECRET_KEY = secrets.token_urlsafe(32)
+    import logging
+    logging.getLogger(__name__).warning("RESOLVEAI_JWT_SECRET not set, using random secret (tokens will not survive restart)")
 JWT_ALGORITHM = "HS256"
 JWT_ACCESS_TOKEN_EXPIRE_HOURS = 24
 

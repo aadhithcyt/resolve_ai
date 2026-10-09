@@ -156,7 +156,8 @@ async def update_ticket(ticket_id: int, ticket: TicketUpdate):
         fields = []
         values = []
         for field, value in ticket.model_dump(exclude_unset=True).items():
-            if value is not None:
+            # Allow explicit None for assigned_to (unassignment); skip other None values
+            if value is not None or field == "assigned_to":
                 fields.append(f"{field} = ?")
                 values.append(value)
 

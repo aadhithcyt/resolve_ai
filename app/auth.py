@@ -19,8 +19,11 @@ async def verify_api_key(request: Request) -> None:
 
     Skips auth entirely if no API_KEY is configured AND no Bearer token is present.
     """
-    # Skip auth for health endpoint
-    if request.url.path == "/health":
+    # Skip auth for health endpoint and notification endpoints
+    skip_paths = {"/health", "/sw.js", "/api/notifications/subscribe",
+                  "/api/notifications/send-test", "/api/notifications/",
+                  "/api/notifications/unread-count"}
+    if request.url.path in skip_paths or request.url.path.startswith("/api/notifications/"):
         return
 
     api_key_header = request.headers.get("X-API-Key", "")

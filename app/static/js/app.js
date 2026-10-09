@@ -9,8 +9,33 @@ let customers = [];
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     setupNavigation();
+    setupKeyboardShortcuts();
+    setupThemeToggle();
+    setupNotificationBell();
+    setupHamburgerMenu();
+    initNotifications();
+    startPresence();
     loadDashboard();
 });
+
+// Cleanup on page unload
+window.addEventListener('beforeunload', () => {
+    stopPresence();
+    disconnectChat();
+});
+
+// Helper: add data-label attributes to table cells for mobile card layout
+function addTableLabels() {
+    document.querySelectorAll('.table-wrap table').forEach(table => {
+        const headers = Array.from(table.querySelectorAll('thead th')).map(th => th.textContent.trim());
+        if (headers.length === 0) return;
+        table.querySelectorAll('tbody tr').forEach(tr => {
+            tr.querySelectorAll('td').forEach((td, i) => {
+                if (headers[i]) td.setAttribute('data-label', headers[i]);
+            });
+        });
+    });
+}
 
 // Navigation
 function setupNavigation() {
@@ -147,74 +172,95 @@ async function loadTickets(filters = {}) {
 
         tickets = await api('/api/tickets/?' + params.toString());
         main.innerHTML = `
-            <div class="card">
-                <div class="card-header">
-                    <span class="card-title">Tickets (${tickets.length})</span>
-                    <button class="btn btn-primary btn-sm" onclick="showNewTicketModal()">+ New Ticket</button>
-                </div>
-                <div class="card-body">
-                    <div class="filters">
-                        <select class="form-select" id="filter-status" onchange="applyFilters()">
-                            <option value="">All Status</option>
-                            <option value="open">Open</option>
-                            <option value="in_progress">In Progress</option>
-                            <option value="resolved">Resolved</option>
-                            <option value="closed">Closed</option>
-                        </select>
-                        <select class="form-select" id="filter-priority" onchange="applyFilters()">
-                            <option value="">All Priority</option>
-                            <option value="low">Low</option>
-                            <option value="medium">Medium</option>
-                            <option value="high">High</option>
-                            <option value="urgent">Urgent</option>
-                        </select>
-                        <select class="form-select" id="filter-sla" onchange="applyFilters()">
-                            <option value="">All SLA</option>
-                            <option value="true">SLA Breached</option>
-                            <option value="false">SLA On Track</option>
-                        </select>
-                        <input type="text" class="form-input" id="filter-search" placeholder="Search tickets..." style="flex:1" onkeyup="debounceApplyFilters()">
+            <div class="tickets-layout">
+                <div class="tickets-main">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">Tickets (${tickets.length})</span>
+                            <button class="btn btn-primary btn-sm" onclick="showNewTicketModal()">+ New Ticket</button>
+                        </div>
+                        <div class="card-body">
+                            <div class="filters">
+                                <select class="form-select" id="filter-status" onchange="applyFilters()">
+                                    <option value="">All Status</option>
+                                    <option value="open">Open</option>
+                                    <option value="in_progress">In Progress</option>
+                                    <option value="resolved">Resolved</option>
+                                    <option value="closed">Closed</option>
+                                </select>
+                                <select class="form-select" id="filter-priority" onchange="applyFilters()">
+                                    <option value="">All Priority</option>
+                                    <option value="low">Low</option>
+                                    <option value="medium">Medium</option>
+                                    <option value="high">High</option>
+                                    <option value="urgent">Urgent</option>
+                                </select>
+                                <select class="form-select" id="filter-sla" onchange="applyFilters()">
+                                    <option value="">All SLA</option>
+                                    <option value="true">SLA Breached</option>
+                                    <option value="false">SLA On Track</option>
+                                </select>
+                                <input type="text" class="form-input" id="filter-search" placeholder="Search tickets..." style="flex:1" onkeyup="debounceApplyFilters()">
+                            </div>
+                            <div class="table-wrap">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>ID</th>
+                                            <th>Subject</th>
+                                            <th>Customer</th>
+                                            <th>Status</th>
+                                            <th>Priority</th>
+                                            <th>Category</th>
+                                            <th>Sentiment</th>
+                                            <th>Created</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${tickets.map(t => `
+                                            <tr class="${t.sla_breached ? 'sla-breached-row' : ''}" data-ticket-id="${t.id}">
+                                                <td>#${t.id}</td>
+                                                <td><a href="#" onclick="showTicketDetail(${t.id}); return false;">${esc(t.subject)}</a></td>
+                                                <td>${esc(t.customer_name || '')}</td>
+                                                <td><span class="badge badge-${t.status}">${t.status.replace('_', ' ')}</span></td>
+                                                <td><span class="badge badge-${t.priority}">${t.priority}</span></td>
+                                                <td>${esc(t.category)}</td>
+                                                <td>${t.sentiment ? `<span class="badge badge-${t.sentiment}">${t.sentiment}</span>` : '-'}</td>
+                                                <td>${t.sla_breached ? '<span class="badge badge-sla-breached">SLA BREACHED</span>' : ''}</td>
+                                                <td>${formatDate(t.created_at)}</td>
+                                                <td>
+                                                    <button class="btn btn-sm" onclick="showTicketDetail(${t.id})">View</button>
+                                                    <button class="btn btn-sm btn-danger" onclick="deleteTicket(${t.id})">Delete</button>
+                                                </td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                                ${tickets.length === 0 ? '<div class="empty-state"><div class="icon">📭</div><p>No tickets found.</p></div>' : ''}
+                            </div>
+                        </div>
                     </div>
-                    <div class="table-wrap">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>ID</th>
-                                    <th>Subject</th>
-                                    <th>Customer</th>
-                                    <th>Status</th>
-                                    <th>Priority</th>
-                                    <th>Category</th>
-                                    <th>Sentiment</th>
-                                    <th>Created</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                ${tickets.map(t => `
-                                    <tr class="${t.sla_breached ? 'sla-breached-row' : ''}">
-                                        <td>#${t.id}</td>
-                                        <td><a href="#" onclick="showTicketDetail(${t.id}); return false;">${esc(t.subject)}</a></td>
-                                        <td>${esc(t.customer_name || '')}</td>
-                                        <td><span class="badge badge-${t.status}">${t.status.replace('_', ' ')}</span></td>
-                                        <td><span class="badge badge-${t.priority}">${t.priority}</span></td>
-                                        <td>${esc(t.category)}</td>
-                                        <td>${t.sentiment ? `<span class="badge badge-${t.sentiment}">${t.sentiment}</span>` : '-'}</td>
-                                        <td>${t.sla_breached ? '<span class="badge badge-sla-breached">SLA BREACHED</span>' : ''}</td>
-                                        <td>${formatDate(t.created_at)}</td>
-                                        <td>
-                                            <button class="btn btn-sm" onclick="showTicketDetail(${t.id})">View</button>
-                                            <button class="btn btn-sm btn-danger" onclick="deleteTicket(${t.id})">Delete</button>
-                                        </td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                        ${tickets.length === 0 ? '<div class="empty-state"><div class="icon">📭</div><p>No tickets found.</p></div>' : ''}
+                </div>
+                <div class="tickets-sidebar">
+                    <div class="card">
+                        <div class="card-header"><span class="card-title">Agents</span></div>
+                        <div class="card-body">
+                            <p style="font-size:0.75rem;color:var(--text2);margin-bottom:12px">Drag tickets onto an agent to assign</p>
+                            <div id="agent-list" class="agent-list">
+                                ${presenceAgents.length > 0 ? presenceAgents.map(a => `
+                                    <div class="agent-item" data-agent-name="${esc(a.agent_id)}">
+                                        <span class="agent-status-dot ${esc(a.status)}"></span>
+                                        <span class="agent-name">${esc(a.agent_id)}</span>
+                                    </div>
+                                `).join('') : '<p style="color:var(--text2);font-size:0.875rem">No agents online</p>'}
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
         `;
+        setupDragAndDrop();
     } catch (e) {
         main.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><p>Error: ${esc(e.message)}</p></div>`;
     }
@@ -247,6 +293,10 @@ async function showTicketDetail(ticketId) {
         const customer = await api(`/api/customers/${ticket.customer_id}`).catch(() => null);
         const attachments = await api(`/api/tickets/${ticketId}/attachments`).catch(() => []);
 
+        // Connect to real-time chat
+        const agentId = localStorage.getItem('agent_id') || 'agent';
+        connectChat(ticketId, 'agent', agentId);
+
         main.innerHTML = `
             <button class="btn btn-sm" onclick="loadTickets()" style="margin-bottom:16px">← Back to Tickets</button>
             <div class="ticket-detail">
@@ -263,11 +313,12 @@ async function showTicketDetail(ticketId) {
                         <div class="card-body">
                             <p style="margin-bottom:16px">${esc(ticket.description)}</p>
                             ${ticket.ai_reply ? `
-                                <div class="ai-reply-box">
+                                <div class="ai-reply-box" id="ai-reply-${ticket.id}">
                                     <div class="label">AI Suggested Reply</div>
                                     <div class="ai-reply-content">${esc(ticket.ai_reply)}</div>
                                     <div style="margin-top:12px;display:flex;gap:8px">
-                                        <button class="btn btn-sm btn-primary" onclick="useAIReply(${ticket.id})">Use This Reply</button>
+                                        <button class="btn btn-sm btn-primary" onclick="showAIReplyEditor(${ticket.id})">✏️ Edit</button>
+                                        <button class="btn btn-sm" onclick="useAIReply(${ticket.id})">Use This Reply</button>
                                         <button class="btn btn-sm" onclick="showAIModal(${ticket.id})">Regenerate</button>
                                     </div>
                                 </div>
@@ -275,19 +326,23 @@ async function showTicketDetail(ticketId) {
                         </div>
                     </div>
                     <div class="card">
-                        <div class="card-header"><span class="card-title">Conversation</span></div>
+                        <div class="card-header">
+                            <span class="card-title">Conversation</span>
+                            <span class="chat-presence" id="chat-presence" style="font-size:0.75rem;color:var(--text2)"></span>
+                        </div>
                         <div class="card-body">
-                            ${messages.map(m => `
-                                <div class="message message-${m.sender}${m.is_ai_generated ? '-ai' : ''}">
-                                    <div class="message-meta">${m.sender}${m.is_ai_generated ? ' (AI)' : ''} — ${formatDate(m.created_at)}</div>
-                                    ${esc(m.content)}
-                                </div>
-                            `).join('')}
-                            <div style="margin-top:16px">
-                                <div class="form-group">
-                                    <textarea class="form-textarea" id="reply-content" placeholder="Type your reply..."></textarea>
-                                </div>
-                                <button class="btn btn-primary" onclick="sendReply(${ticket.id})">Send Reply</button>
+                            <div id="chat-messages" style="max-height:400px;overflow-y:auto;margin-bottom:16px">
+                                ${messages.map(m => `
+                                    <div class="message message-${m.sender}${m.is_ai_generated ? '-ai' : ''}">
+                                        <div class="message-meta">${m.sender}${m.is_ai_generated ? ' (AI)' : ''} — ${formatDate(m.created_at)}</div>
+                                        ${esc(m.content)}
+                                    </div>
+                                `).join('')}
+                            </div>
+                            <div id="chat-typing" style="display:none;font-size:0.875rem;color:var(--text2);margin-bottom:8px"></div>
+                            <div style="display:flex;gap:8px">
+                                <input type="text" class="form-input" id="chat-input" placeholder="Type a message..." style="flex:1" onkeypress="if(event.key==='Enter')sendChatMessage()">
+                                <button class="btn btn-primary" onclick="sendChatMessage()">Send</button>
                             </div>
                         </div>
                     </div>
@@ -1093,4 +1148,550 @@ function formatDate(dateStr) {
     if (!dateStr) return '-';
     const d = new Date(dateStr);
     return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+// ─── Presence Indicator ──────────────────────────────────────────────────────
+let presenceAgents = [];
+let heartbeatInterval = null;
+
+async function updatePresence() {
+    try {
+        const resp = await fetch('/api/presence/online');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        presenceAgents = data.agents || [];
+        const indicator = document.getElementById('presence-indicator');
+        const text = document.getElementById('presence-text');
+        if (indicator && text) {
+            const count = data.count || 0;
+            text.textContent = `${count} agent${count !== 1 ? 's' : ''} online`;
+            indicator.classList.toggle('has-online', count > 0);
+        }
+    } catch (e) { /* ignore */ }
+}
+
+async function sendHeartbeat() {
+    try {
+        const agentId = localStorage.getItem('agent_id') || 'anonymous';
+        await fetch('/api/presence/heartbeat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ agent_id: agentId, status: 'online' }),
+        });
+    } catch (e) { /* ignore */ }
+}
+
+function startPresence() {
+    sendHeartbeat();
+    updatePresence();
+    heartbeatInterval = setInterval(() => {
+        sendHeartbeat();
+        updatePresence();
+    }, 30000);
+}
+
+function stopPresence() {
+    if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+        heartbeatInterval = null;
+    }
+}
+
+// ─── Drag-and-Drop Assignment ────────────────────────────────────────────────
+let draggedTicketId = null;
+
+function setupDragAndDrop() {
+    document.querySelectorAll('[data-agent-name]').forEach(el => {
+        el.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            el.classList.add('drag-over');
+        });
+        el.addEventListener('dragleave', () => {
+            el.classList.remove('drag-over');
+        });
+        el.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            el.classList.remove('drag-over');
+            const agentName = el.dataset.agentName;
+            if (draggedTicketId) {
+                try {
+                    await api(`/api/tickets/${draggedTicketId}`, {
+                        method: 'PUT',
+                        body: JSON.stringify({ assigned_to: agentName }),
+                    });
+                    showToast(`Ticket #${draggedTicketId} assigned to ${agentName}`);
+                    draggedTicketId = null;
+                    loadTickets();
+                } catch (err) {
+                    showToast(err.message, 'error');
+                }
+            }
+        });
+    });
+
+    document.querySelectorAll('[data-ticket-id]').forEach(el => {
+        el.setAttribute('draggable', 'true');
+        el.addEventListener('dragstart', (e) => {
+            draggedTicketId = parseInt(el.dataset.ticketId);
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', draggedTicketId);
+        });
+        el.addEventListener('dragend', () => {
+            draggedTicketId = null;
+        });
+    });
+}
+
+// ─── Real-time Chat ──────────────────────────────────────────────────────────
+let chatSocket = null;
+let chatTicketId = null;
+
+function connectChat(ticketId, role, identity) {
+    if (chatSocket) {
+        chatSocket.close();
+        chatSocket = null;
+    }
+    chatTicketId = ticketId;
+    const wsUrl = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/chat/${ticketId}?role=${encodeURIComponent(role)}&identity=${encodeURIComponent(identity)}`;
+    chatSocket = new WebSocket(wsUrl);
+
+    chatSocket.onopen = () => {
+        console.log('Chat connected');
+    };
+
+    chatSocket.onmessage = (event) => {
+        try {
+            const data = JSON.parse(event.data);
+            if (data.type === 'message') {
+                appendChatMessage(data);
+            } else if (data.type === 'history') {
+                renderChatHistory(data.messages);
+            } else if (data.type === 'typing') {
+                showTypingIndicator(data.identity);
+            } else if (data.type === 'presence') {
+                updateChatPresence(data.count);
+            }
+        } catch (e) { /* ignore */ }
+    };
+
+    chatSocket.onclose = () => {
+        console.log('Chat disconnected');
+        chatSocket = null;
+    };
+
+    chatSocket.onerror = (e) => {
+        console.error('Chat error:', e);
+    };
+}
+
+function appendChatMessage(msg) {
+    const container = document.getElementById('chat-messages');
+    if (!container) return;
+    const div = document.createElement('div');
+    div.className = `message message-${msg.sender}${msg.is_ai_generated ? '-ai' : ''}`;
+    div.innerHTML = `
+        <div class="message-meta">${esc(msg.sender)}${msg.is_ai_generated ? ' (AI)' : ''} — ${formatDate(msg.created_at)}</div>
+        ${esc(msg.content)}
+    `;
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
+}
+
+function renderChatHistory(messages) {
+    const container = document.getElementById('chat-messages');
+    if (!container) return;
+    container.innerHTML = '';
+    messages.forEach(m => {
+        const div = document.createElement('div');
+        div.className = `message message-${m.sender}${m.is_ai_generated ? '-ai' : ''}`;
+        div.innerHTML = `
+            <div class="message-meta">${esc(m.sender)}${m.is_ai_generated ? ' (AI)' : ''} — ${formatDate(m.created_at)}</div>
+            ${esc(m.content)}
+        `;
+        container.appendChild(div);
+    });
+    container.scrollTop = container.scrollHeight;
+}
+
+function sendChatMessage() {
+    const input = document.getElementById('chat-input');
+    if (!input || !chatSocket || !input.value.trim()) return;
+    chatSocket.send(JSON.stringify({
+        type: 'message',
+        sender: 'agent',
+        content: input.value.trim(),
+    }));
+    input.value = '';
+}
+
+function showTypingIndicator(identity) {
+    const indicator = document.getElementById('chat-typing');
+    if (indicator) {
+        indicator.textContent = `${identity} is typing...`;
+        indicator.style.display = 'block';
+        setTimeout(() => { indicator.style.display = 'none'; }, 3000);
+    }
+}
+
+function updateChatPresence(count) {
+    const el = document.getElementById('chat-presence');
+    if (el) {
+        el.textContent = `${count} online`;
+    }
+}
+
+function disconnectChat() {
+    if (chatSocket) {
+        chatSocket.close();
+        chatSocket = null;
+    }
+    chatTicketId = null;
+}
+
+// ─── AI Reply Collaborative Editing ──────────────────────────────────────────
+let editingTicketId = null;
+let originalAIReply = '';
+
+function showAIReplyEditor(ticketId) {
+    editingTicketId = ticketId;
+    const ticket = tickets.find(t => t.id === ticketId);
+    if (!ticket || !ticket.ai_reply) return;
+
+    originalAIReply = ticket.ai_reply;
+    const container = document.getElementById(`ai-reply-${ticketId}`);
+    if (!container) return;
+
+    container.innerHTML = `
+        <div class="ai-editor">
+            <div class="ai-editor-header">
+                <span class="ai-editor-title">✏️ Edit AI Reply</span>
+                <span class="ai-editor-hint">Edit before sending</span>
+            </div>
+            <textarea class="form-textarea ai-editor-textarea" id="ai-edit-textarea">${esc(ticket.ai_reply)}</textarea>
+            <div class="ai-editor-actions">
+                <button class="btn btn-sm btn-primary" onclick="saveAIReplyEdit(${ticketId})">Save & Send</button>
+                <button class="btn btn-sm" onclick="cancelAIReplyEdit(${ticketId})">Cancel</button>
+            </div>
+        </div>
+    `;
+}
+
+async function saveAIReplyEdit(ticketId) {
+    const textarea = document.getElementById('ai-edit-textarea');
+    if (!textarea) return;
+    const editedContent = textarea.value.trim();
+    if (!editedContent) return;
+
+    try {
+        // Update the AI reply on the ticket
+        await api(`/api/tickets/${ticketId}`, {
+            method: 'PUT',
+            body: JSON.stringify({ ai_reply: editedContent }),
+        });
+
+        // Send as message
+        await api(`/api/tickets/${ticketId}/messages`, {
+            method: 'POST',
+            body: JSON.stringify({
+                sender: 'agent',
+                content: editedContent,
+                is_ai_generated: true,
+            }),
+        });
+
+        showToast('AI reply edited and sent');
+        editingTicketId = null;
+        originalAIReply = '';
+        showTicketDetail(ticketId);
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
+function cancelAIReplyEdit(ticketId) {
+    editingTicketId = null;
+    originalAIReply = '';
+    showTicketDetail(ticketId);
+}
+
+// ─── Keyboard Shortcuts ─────────────────────────────────────────────────────
+function setupKeyboardShortcuts() {
+    document.addEventListener('keydown', (e) => {
+        // Don't fire shortcuts when typing in inputs (except for specific ones)
+        const tag = e.target.tagName.toLowerCase();
+        const isInput = tag === 'input' || tag === 'textarea' || tag === 'select';
+
+        // Escape - close modal (works everywhere)
+        if (e.key === 'Escape') {
+            closeModal();
+            closeNotificationDropdown();
+            return;
+        }
+
+        // Ctrl+Enter - send reply (when in textarea)
+        if (e.ctrlKey && e.key === 'Enter' && isInput) {
+            e.preventDefault();
+            const replyBtn = document.querySelector('#reply-content');
+            if (replyBtn) {
+                const sendBtn = replyBtn.closest('.card-body')?.querySelector('.btn-primary');
+                if (sendBtn) sendBtn.click();
+            }
+            // Also handle chat input
+            const chatInput = document.getElementById('chat-input');
+            if (chatInput && chatInput.tagName === 'INPUT') {
+                sendChatMessage();
+            }
+            return;
+        }
+
+        // Ctrl+K or / - focus search
+        if ((e.ctrlKey && e.key === 'k') || (!isInput && e.key === '/')) {
+            e.preventDefault();
+            const searchInput = document.getElementById('filter-search') || document.getElementById('kb-search');
+            if (searchInput) searchInput.focus();
+            return;
+        }
+
+        // Ctrl+N - new ticket
+        if (e.ctrlKey && e.key === 'n') {
+            e.preventDefault();
+            showNewTicketModal();
+            return;
+        }
+    });
+}
+
+// ─── Theme Toggle ───────────────────────────────────────────────────────────
+function setupThemeToggle() {
+    const toggle = document.getElementById('theme-toggle');
+    if (!toggle) return;
+
+    // Load saved theme or default to dark
+    const savedTheme = localStorage.getItem('resolveai-theme') || 'dark';
+    applyTheme(savedTheme);
+
+    toggle.addEventListener('click', () => {
+        const current = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+        applyTheme(current);
+        localStorage.setItem('resolveai-theme', current);
+    });
+}
+
+function applyTheme(theme) {
+    if (theme === 'light') {
+        document.documentElement.setAttribute('data-theme', 'light');
+        const toggle = document.getElementById('theme-toggle');
+        if (toggle) toggle.textContent = '☀️';
+    } else {
+        document.documentElement.removeAttribute('data-theme');
+        const toggle = document.getElementById('theme-toggle');
+        if (toggle) toggle.textContent = '🌙';
+    }
+}
+
+// ─── Notification Bell ──────────────────────────────────────────────────────
+function setupNotificationBell() {
+    const bellBtn = document.getElementById('bell-btn');
+    const dropdown = document.getElementById('notification-dropdown');
+
+    if (bellBtn && dropdown) {
+        bellBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            dropdown.classList.toggle('active');
+            if (dropdown.classList.contains('active')) {
+                loadNotifications();
+            }
+        });
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!dropdown.contains(e.target) && !bellBtn.contains(e.target)) {
+                dropdown.classList.remove('active');
+            }
+        });
+    }
+}
+
+function closeNotificationDropdown() {
+    const dropdown = document.getElementById('notification-dropdown');
+    if (dropdown) dropdown.classList.remove('active');
+}
+
+async function loadNotifications() {
+    try {
+        const notifications = await api('/api/notifications/');
+        renderNotifications(notifications);
+        updateBellBadge();
+    } catch (e) {
+        // Silently fail - notifications are non-critical
+    }
+}
+
+function renderNotifications(notifications) {
+    const list = document.getElementById('notification-list');
+    if (!list) return;
+
+    if (notifications.length === 0) {
+        list.innerHTML = '<div class="notification-empty">No notifications yet</div>';
+        return;
+    }
+
+    list.innerHTML = notifications.map(n => `
+        <div class="notification-item ${n.read ? '' : 'unread'}" onclick="markNotificationRead(${n.id})" data-notification-id="${n.id}">
+            <div class="notification-item-title">${esc(n.title)}</div>
+            <div class="notification-item-body">${esc(n.body)}</div>
+            <div class="notification-item-time">${formatDate(n.created_at)}</div>
+        </div>
+    `).join('');
+}
+
+async function updateBellBadge() {
+    try {
+        const { count } = await api('/api/notifications/unread-count');
+        const badge = document.getElementById('bell-badge');
+        if (badge) {
+            if (count > 0) {
+                badge.textContent = count > 99 ? '99+' : count;
+                badge.style.display = 'flex';
+            } else {
+                badge.style.display = 'none';
+            }
+        }
+    } catch (e) {
+        // Silently fail
+    }
+}
+
+async function markNotificationRead(id) {
+    try {
+        await api(`/api/notifications/${id}/read`, { method: 'POST' });
+        loadNotifications();
+    } catch (e) {
+        // Silently fail
+    }
+}
+
+async function markAllNotificationsRead() {
+    try {
+        await api('/api/notifications/mark-all-read', { method: 'POST' });
+        loadNotifications();
+    } catch (e) {
+        // Silently fail
+    }
+}
+
+// ─── Push Notifications (Service Worker) ────────────────────────────────────
+function initNotifications() {
+    const enableBtn = document.getElementById('enable-notifications-btn');
+    if (!enableBtn) return;
+
+    // Check if notifications are supported
+    if (!('Notification' in window)) {
+        enableBtn.style.display = 'none';
+        return;
+    }
+
+    // Show enable button if permission not yet granted
+    if (Notification.permission === 'default') {
+        enableBtn.style.display = 'inline-flex';
+    } else if (Notification.permission === 'granted') {
+        enableBtn.style.display = 'none';
+        registerServiceWorker();
+    } else {
+        // Denied
+        enableBtn.style.display = 'none';
+    }
+
+    // Poll for new notifications every 30 seconds
+    setInterval(updateBellBadge, 30000);
+}
+
+async function requestNotificationPermission() {
+    const enableBtn = document.getElementById('enable-notifications-btn');
+    try {
+        const permission = await Notification.requestPermission();
+        if (permission === 'granted') {
+            enableBtn.style.display = 'none';
+            await registerServiceWorker();
+            showToast('Notifications enabled!');
+        } else {
+            showToast('Notification permission denied', 'error');
+        }
+    } catch (e) {
+        showToast('Failed to enable notifications', 'error');
+    }
+}
+
+async function registerServiceWorker() {
+    if (!('serviceWorker' in navigator)) return;
+    try {
+        const registration = await navigator.serviceWorker.register('/public/sw.js');
+        await subscribeToPush(registration);
+    } catch (e) {
+        console.error('SW registration failed:', e);
+    }
+}
+
+async function subscribeToPush(registration) {
+    try {
+        // Check for existing subscription
+        let subscription = await registration.pushManager.getSubscription();
+
+        if (!subscription) {
+            // Create new subscription
+            // In production, you'd fetch the VAPID public key from the server
+            subscription = await registration.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: urlBase64ToUint8Array(
+                    'BEl62iV9i3RvJ5x2E8QJ1y4X7Z0a3c6d9f1g2h4j5k7l8m0n2o4p6q8r0s2t4'
+                ),
+            });
+        }
+
+        // Send subscription to server
+        await api('/api/notifications/subscribe', {
+            method: 'POST',
+            body: JSON.stringify(subscription),
+        });
+    } catch (e) {
+        console.error('Push subscription failed:', e);
+    }
+}
+
+function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding)
+        .replace(/-/g, '+')
+        .replace(/_/g, '/');
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+        outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+}
+
+// ─── Hamburger Menu (Mobile) ────────────────────────────────────────────────
+function setupHamburgerMenu() {
+    const hamburger = document.getElementById('hamburger');
+    const nav = document.getElementById('header-nav');
+
+    if (hamburger && nav) {
+        hamburger.addEventListener('click', () => {
+            nav.classList.toggle('active');
+            hamburger.classList.toggle('active');
+            const expanded = nav.classList.contains('active');
+            hamburger.setAttribute('aria-expanded', expanded);
+        });
+
+        // Close menu when clicking a nav button
+        nav.querySelectorAll('.nav-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                nav.classList.remove('active');
+                hamburger.classList.remove('active');
+                hamburger.setAttribute('aria-expanded', 'false');
+            });
+        });
+    }
 }

@@ -16,6 +16,7 @@ router = APIRouter(prefix="/api", tags=["attachments"])
 
 # Maximum upload size: 10 MB
 MAX_FILE_SIZE = 10 * 1024 * 1024
+ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".pdf", ".txt", ".log", ".csv", ".json", ".zip"}
 
 
 def _ensure_uploads_dir() -> Path:
@@ -33,6 +34,11 @@ async def upload_attachment(ticket_id: int, file: UploadFile = File(...)):
         cursor = await db.execute("SELECT id FROM tickets WHERE id = ?", (ticket_id,))
         if not await cursor.fetchone():
             raise HTTPException(status_code=404, detail="Ticket not found")
+
+    # Validate file extension
+    file_ext = Path(file.filename or "").suffix.lower()
+    if file_ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"File type not allowed: {file_ext}")
 
     # Read and validate file
     content = await file.read()

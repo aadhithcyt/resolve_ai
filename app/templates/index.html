@@ -9,14 +9,41 @@
 <body>
     <header class="header">
         <div class="container">
-            <a href="/" class="logo">Resolve<span>AI</span></a>
-            <nav class="header-nav">
+            <div class="header-left">
+                <button class="hamburger" id="hamburger" aria-label="Toggle menu" aria-expanded="false">
+                    <span></span><span></span><span></span>
+                </button>
+                <a href="/" class="logo">Resolve<span>AI</span></a>
+            </div>
+            <nav class="header-nav" id="header-nav">
                 <button class="nav-btn active" data-view="dashboard">Dashboard</button>
                 <button class="nav-btn" data-view="tickets">Tickets</button>
                 <button class="nav-btn" data-view="customers">Customers</button>
                 <button class="nav-btn" data-view="knowledge">Knowledge</button>
                 <button class="nav-btn" data-view="analytics">Analytics</button>
             </nav>
+            <div class="header-actions">
+                <button class="icon-btn" id="theme-toggle" aria-label="Toggle theme" title="Toggle theme">🌙</button>
+                <div class="notification-bell" id="notification-bell">
+                    <button class="icon-btn" id="bell-btn" aria-label="Notifications" title="Notifications">
+                        🔔<span class="bell-badge" id="bell-badge" style="display:none"></span>
+                    </button>
+                    <div class="notification-dropdown" id="notification-dropdown">
+                        <div class="notification-header">
+                            <span>Notifications</span>
+                            <button class="btn btn-sm" onclick="markAllNotificationsRead()">Mark all read</button>
+                        </div>
+                        <div class="notification-list" id="notification-list">
+                            <div class="notification-empty">No notifications yet</div>
+                        </div>
+                    </div>
+                </div>
+                <button class="btn btn-primary btn-sm" id="enable-notifications-btn" style="display:none" onclick="requestNotificationPermission()">Enable Notifications</button>
+                <div class="presence-indicator" id="presence-indicator">
+                    <span class="presence-dot"></span>
+                    <span class="presence-text" id="presence-text">0 agents online</span>
+                </div>
+            </div>
         </div>
     </header>
 

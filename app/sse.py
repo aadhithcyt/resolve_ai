@@ -45,6 +45,24 @@ async def ticket_events():
 
                         yield f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
 
+                        # Also create notification for SLA breaches and new tickets
+                        if event_type in ("sla_breached", "ticket_created"):
+                            notif_title = "SLA Breached" if event_type == "sla_breached" else "New Ticket"
+                            notif_body = f"Ticket #{data['id']}: {data['subject'][:60]}"
+                            notif_type = "sla" if event_type == "sla_breached" else "ticket"
+                            await db.execute(
+                                "INSERT INTO notifications (title, body, type, ticket_id) VALUES (?, ?, ?, ?)",
+                                (notif_title, notif_body, notif_type, data["id"]),
+                            )
+                            await db.commit()
+                            notif_data = json.dumps({
+                                "title": notif_title,
+                                "body": notif_body,
+                                "type": notif_type,
+                                "ticket_id": data["id"],
+                            })
+                            yield f"event: notification\ndata: {notif_data}\n\n"
+
                 # Heartbeat every 30 seconds
                 yield f": heartbeat\n\n"
 
