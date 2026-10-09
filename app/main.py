@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .database import init_db
 from .routers import tickets, customers, ai_assist, dashboard
+from .auth import AuthMiddleware
 
 
 @asynccontextmanager
@@ -21,6 +22,7 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+app.add_middleware(AuthMiddleware)
 
 # API routes
 app.include_router(tickets.router)

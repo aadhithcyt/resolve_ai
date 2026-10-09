@@ -1,11 +1,30 @@
-"""Ticket management routes."""
+"""Ticket management routes with SLA tracking."""
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException, Query
 from typing import List, Optional
 from ..database import get_db
 from ..models import TicketCreate, TicketUpdate, TicketResponse, MessageCreate, MessageResponse
 from ..ai import analyze_sentiment
+from ..config import SLA_TARGETS_HOURS
 
 router = APIRouter(prefix="/api/tickets", tags=["tickets"])
+
+
+def _compute_sla_due_at(priority: str, created_at: Optional[datetime] = None) -> datetime:
+    """Compute SLA due time based on priority."""
+    hours = SLA_TARGETS_HOURS.get(priority, 48)
+    base = created_at or datetime.now(timezone.utc)
+    return base + timedelta(hours=hours)
+
+
+def _is_sla_breached(sla_due_at: Optional[datetime], status: str, now: Optional[datetime] = None) -> bool:
+    """Check if SLA is breached (ticket still open past due)."""
+    if not sla_due_at:
+        return False
+    if status in ("resolved", "closed"):
+        return False
+    now = now or datetime.now(timezone.utc)
+    return now > sla_due_at
 
 
 @router.post("/", response_model=TicketResponse, status_code=201)
@@ -21,11 +40,16 @@ async def create_ticket(ticket: TicketCreate):
         # Analyze sentiment
         sentiment_result = await analyze_sentiment(ticket.description)
 
+        # Compute SLA
+        now = datetime.now(timezone.utc)
+        sla_due = _compute_sla_due_at(ticket.priority, now)
+
         cursor = await db.execute(
-            """INSERT INTO tickets (customer_id, subject, description, priority, category, sentiment)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO tickets (customer_id, subject, description, priority, category, sentiment, sla_due_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (ticket.customer_id, ticket.subject, ticket.description,
-             ticket.priority, ticket.category, sentiment_result["sentiment"]),
+             ticket.priority, ticket.category, sentiment_result["sentiment"],
+             sla_due.isoformat()),
         )
         ticket_id = cursor.lastrowid
 
@@ -37,7 +61,13 @@ async def create_ticket(ticket: TicketCreate):
         await db.commit()
 
         row = await db.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,))
-        return dict(await row.fetchone())
+        ticket_data = dict(await row.fetchone())
+        ticket_data["sla_breached"] = _is_sla_breached(
+            datetime.fromisoformat(ticket_data["sla_due_at"]),
+            ticket_data["status"],
+            now,
+        )
+        return ticket_data
 
 
 @router.get("/", response_model=List[TicketResponse])
@@ -47,6 +77,7 @@ async def list_tickets(
     category: Optional[str] = None,
     customer_id: Optional[int] = None,
     search: Optional[str] = None,
+    sla_breached: Optional[bool] = None,
     skip: int = 0,
     limit: int = 50,
 ):
@@ -75,7 +106,19 @@ async def list_tickets(
 
         cursor = await db.execute(query, params)
         rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
+        now = datetime.now(timezone.utc)
+        results = []
+        for r in rows:
+            t = dict(r)
+            t["sla_breached"] = _is_sla_breached(
+                datetime.fromisoformat(t["sla_due_at"]) if t.get("sla_due_at") else None,
+                t["status"],
+                now,
+            )
+            if sla_breached is not None and t["sla_breached"] != sla_breached:
+                continue
+            results.append(t)
+        return results
 
 
 @router.get("/{ticket_id}", response_model=TicketResponse)
@@ -85,22 +128,38 @@ async def get_ticket(ticket_id: int):
         row = await cursor.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Ticket not found")
-        return dict(row)
+        ticket_data = dict(row)
+        ticket_data["sla_breached"] = _is_sla_breached(
+            datetime.fromisoformat(ticket_data["sla_due_at"]) if ticket_data.get("sla_due_at") else None,
+            ticket_data["status"],
+            datetime.now(timezone.utc),
+        )
+        return ticket_data
 
 
 @router.put("/{ticket_id}", response_model=TicketResponse)
 async def update_ticket(ticket_id: int, ticket: TicketUpdate):
     async with get_db() as db:
         existing = await db.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,))
-        if not await existing.fetchone():
+        existing_row = await existing.fetchone()
+        if not existing_row:
             raise HTTPException(status_code=404, detail="Ticket not found")
 
+        existing_data = dict(existing_row)
         fields = []
         values = []
         for field, value in ticket.model_dump(exclude_unset=True).items():
             if value is not None:
                 fields.append(f"{field} = ?")
                 values.append(value)
+
+        # Recompute SLA if priority changed
+        new_priority = ticket.priority or existing_data["priority"]
+        if ticket.priority and ticket.priority != existing_data["priority"]:
+            now = datetime.now(timezone.utc)
+            sla_due = _compute_sla_due_at(new_priority, now)
+            fields.append("sla_due_at = ?")
+            values.append(sla_due.isoformat())
 
         # Set resolved_at when status changes to resolved
         if ticket.status == "resolved":
@@ -115,7 +174,13 @@ async def update_ticket(ticket_id: int, ticket: TicketUpdate):
             await db.commit()
 
         cursor = await db.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,))
-        return dict(await cursor.fetchone())
+        ticket_data = dict(await cursor.fetchone())
+        ticket_data["sla_breached"] = _is_sla_breached(
+            datetime.fromisoformat(ticket_data["sla_due_at"]) if ticket_data.get("sla_due_at") else None,
+            ticket_data["status"],
+            datetime.now(timezone.utc),
+        )
+        return ticket_data
 
 
 @router.delete("/{ticket_id}", status_code=204)
@@ -153,3 +218,32 @@ async def add_message(ticket_id: int, message: MessageCreate):
 
         row = await db.execute("SELECT * FROM messages WHERE id = ?", (cursor.lastrowid,))
         return dict(await row.fetchone())
+
+
+@router.get("/{ticket_id}/sla")
+async def get_ticket_sla(ticket_id: int):
+    """Get SLA details for a ticket."""
+    async with get_db() as db:
+        cursor = await db.execute(
+            "SELECT sla_due_at, sla_breached, status, priority, created_at FROM tickets WHERE id = ?",
+            (ticket_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Ticket not found")
+
+        data = dict(row)
+        sla_due = datetime.fromisoformat(data["sla_due_at"]) if data.get("sla_due_at") else None
+        now = datetime.now(timezone.utc)
+        breached = _is_sla_breached(sla_due, data["status"], now)
+        hours_remaining = None
+        if sla_due and data["status"] not in ("resolved", "closed"):
+            hours_remaining = round((sla_due - now).total_seconds() / 3600, 1)
+
+        return {
+            "sla_due_at": data["sla_due_at"],
+            "sla_breached": breached,
+            "status": data["status"],
+            "priority": data["priority"],
+            "hours_remaining": hours_remaining,
+        }

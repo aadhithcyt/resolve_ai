@@ -1,4 +1,5 @@
 """Dashboard and analytics routes."""
+from datetime import datetime, timezone
 from fastapi import APIRouter
 from ..database import get_db
 from ..models import DashboardStats
@@ -37,6 +38,18 @@ async def get_stats():
         avg_row = await cursor.fetchone()
         avg_hours = avg_row["avg_hours"] if avg_row and avg_row["avg_hours"] else None
 
+        # SLA breached count
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = await db.execute(
+            """SELECT COUNT(*) as count FROM tickets
+               WHERE sla_due_at IS NOT NULL
+               AND status NOT IN ('resolved', 'closed')
+               AND sla_due_at < ?""",
+            (now,),
+        )
+        sla_row = await cursor.fetchone()
+        sla_breached_count = sla_row["count"] if sla_row else 0
+
         # Recent tickets
         cursor = await db.execute(
             """SELECT t.*, c.name as customer_name
@@ -57,4 +70,5 @@ async def get_stats():
             tickets_by_priority=priority_counts,
             tickets_by_category=category_counts,
             recent_tickets=recent,
+            sla_breached=sla_breached_count,
         )

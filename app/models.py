@@ -1,5 +1,5 @@
 """Pydantic models for request/response validation."""
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, Literal
 from datetime import datetime
 
@@ -19,15 +19,14 @@ class CustomerUpdate(BaseModel):
 
 
 class CustomerResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     name: str
     email: str
     phone: Optional[str] = None
     company: Optional[str] = None
     created_at: str
-
-    class Config:
-        from_attributes = True
 
 
 class TicketCreate(BaseModel):
@@ -48,6 +47,8 @@ class TicketUpdate(BaseModel):
 
 
 class TicketResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     customer_id: int
     subject: str
@@ -58,12 +59,11 @@ class TicketResponse(BaseModel):
     sentiment: Optional[str] = None
     ai_reply: Optional[str] = None
     assigned_to: Optional[str] = None
+    sla_due_at: Optional[str] = None
+    sla_breached: Optional[bool] = None
     created_at: str
     updated_at: str
     resolved_at: Optional[str] = None
-
-    class Config:
-        from_attributes = True
 
 
 class MessageCreate(BaseModel):
@@ -73,15 +73,14 @@ class MessageCreate(BaseModel):
 
 
 class MessageResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     ticket_id: int
     sender: str
     content: str
     is_ai_generated: bool
     created_at: str
-
-    class Config:
-        from_attributes = True
 
 
 class AIReplyRequest(BaseModel):
@@ -105,3 +104,4 @@ class DashboardStats(BaseModel):
     tickets_by_priority: dict
     tickets_by_category: dict
     recent_tickets: list
+    sla_breached: int = 0

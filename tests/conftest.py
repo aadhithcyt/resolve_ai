@@ -10,6 +10,11 @@ _tmp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
 _tmp_db.close()
 os.environ["RESOLVEAI_DB"] = _tmp_db.name
 
+# Disable rate limiting and auth for tests
+os.environ["RESOLVEAI_API_KEY"] = ""
+os.environ["RATE_LIMIT_RPM"] = "10000"
+os.environ["RATE_LIMIT_BURST"] = "10000"
+
 
 @pytest_asyncio.fixture(autouse=True)
 async def init_test_db():

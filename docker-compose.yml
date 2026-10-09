@@ -1,0 +1,26 @@
+services:
+  resolveai:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - RESOLVEAI_MODEL=${RESOLVEAI_MODEL:-openai/gpt-oss-120b}
+      - RESOLVEAI_API_KEY=${RESOLVEAI_API_KEY:-}
+      - RATE_LIMIT_RPM=${RATE_LIMIT_RPM:-60}
+      - RATE_LIMIT_BURST=${RATE_LIMIT_BURST:-10}
+      - RESOLVEAI_HOST=0.0.0.0
+      - RESOLVEAI_PORT=8000
+      - RESOLVEAI_DEBUG=${RESOLVEAI_DEBUG:-false}
+      - EMAIL_HOST=${EMAIL_HOST:-}
+      - EMAIL_PORT=${EMAIL_PORT:-587}
+      - EMAIL_USER=${EMAIL_USER:-}
+      - EMAIL_PASSWORD=${EMAIL_PASSWORD:-}
+      - EMAIL_FROM=${EMAIL_FROM:-noreply@resolveai.local}
+      - EMAIL_TO=${EMAIL_TO:-}
+    volumes:
+      - resolveai_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  resolveai_data:

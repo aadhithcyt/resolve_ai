@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS tickets (
     sentiment TEXT CHECK(sentiment IN ('positive','neutral','negative')),
     ai_reply TEXT,
     assigned_to TEXT,
+    sla_due_at TIMESTAMP,
+    sla_breached BOOLEAN DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     resolved_at TIMESTAMP,
