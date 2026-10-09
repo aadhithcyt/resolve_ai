@@ -1,6 +1,7 @@
 """Tests for ticket routes."""
 import pytest
 import pytest_asyncio
+from unittest.mock import AsyncMock, patch
 from httpx import AsyncClient, ASGITransport
 from app.main import app
 
@@ -22,13 +23,17 @@ async def test_create_ticket(client):
     assert cust.status_code == 201
     customer_id = cust.json()["id"]
 
-    # Create ticket
-    resp = await client.post("/api/tickets/", json={
-        "customer_id": customer_id,
-        "subject": "Test ticket",
-        "description": "This is a test ticket",
-        "priority": "high",
-    })
+    # Mock triage to preserve original priority
+    with patch("app.routers.tickets.classify_ticket", new=AsyncMock(return_value={
+        "category": "general", "priority": "high", "confidence": 1.0, "reasoning": "mock"
+    })):
+        # Create ticket
+        resp = await client.post("/api/tickets/", json={
+            "customer_id": customer_id,
+            "subject": "Test ticket",
+            "description": "This is a test ticket",
+            "priority": "high",
+        })
     assert resp.status_code == 201
     data = resp.json()
     assert data["subject"] == "Test ticket"

@@ -1,6 +1,7 @@
 """Tests for SLA tracking."""
 import pytest
 import pytest_asyncio
+from unittest.mock import AsyncMock, patch
 from httpx import AsyncClient, ASGITransport
 from app.main import app
 
@@ -19,12 +20,15 @@ async def test_ticket_sla_due_at_set(client):
         "name": "SLA Test",
         "email": "sla@test.com",
     })
-    ticket = await client.post("/api/tickets/", json={
-        "customer_id": cust.json()["id"],
-        "subject": "SLA test",
-        "description": "Testing SLA",
-        "priority": "urgent",
-    })
+    with patch("app.routers.tickets.classify_ticket", new=AsyncMock(return_value={
+        "category": "general", "priority": "urgent", "confidence": 1.0, "reasoning": "mock"
+    })):
+        ticket = await client.post("/api/tickets/", json={
+            "customer_id": cust.json()["id"],
+            "subject": "SLA test",
+            "description": "Testing SLA",
+            "priority": "urgent",
+        })
     data = ticket.json()
     assert "sla_due_at" in data
     assert data["sla_due_at"] is not None
@@ -39,12 +43,15 @@ async def test_ticket_sla_breached_false_for_new(client):
         "name": "SLA Breach Test",
         "email": "sla_breach@test.com",
     })
-    ticket = await client.post("/api/tickets/", json={
-        "customer_id": cust.json()["id"],
-        "subject": "SLA breach test",
-        "description": "Testing SLA breach",
-        "priority": "high",
-    })
+    with patch("app.routers.tickets.classify_ticket", new=AsyncMock(return_value={
+        "category": "general", "priority": "high", "confidence": 1.0, "reasoning": "mock"
+    })):
+        ticket = await client.post("/api/tickets/", json={
+            "customer_id": cust.json()["id"],
+            "subject": "SLA breach test",
+            "description": "Testing SLA breach",
+            "priority": "high",
+        })
     data = ticket.json()
     assert data["sla_breached"] is False or data["sla_breached"] == 0
 
@@ -56,12 +63,15 @@ async def test_ticket_sla_endpoint(client):
         "name": "SLA Endpoint Test",
         "email": "sla_endpoint@test.com",
     })
-    ticket = await client.post("/api/tickets/", json={
-        "customer_id": cust.json()["id"],
-        "subject": "SLA endpoint test",
-        "description": "Testing SLA endpoint",
-        "priority": "medium",
-    })
+    with patch("app.routers.tickets.classify_ticket", new=AsyncMock(return_value={
+        "category": "general", "priority": "medium", "confidence": 1.0, "reasoning": "mock"
+    })):
+        ticket = await client.post("/api/tickets/", json={
+            "customer_id": cust.json()["id"],
+            "subject": "SLA endpoint test",
+            "description": "Testing SLA endpoint",
+            "priority": "medium",
+        })
     ticket_id = ticket.json()["id"]
 
     resp = await client.get(f"/api/tickets/{ticket_id}/sla")
@@ -85,12 +95,15 @@ async def test_sla_filter_breached(client):
         "name": "SLA Filter Test",
         "email": "sla_filter@test.com",
     })
-    await client.post("/api/tickets/", json={
-        "customer_id": cust.json()["id"],
-        "subject": "SLA filter test",
-        "description": "Testing SLA filter",
-        "priority": "low",
-    })
+    with patch("app.routers.tickets.classify_ticket", new=AsyncMock(return_value={
+        "category": "general", "priority": "low", "confidence": 1.0, "reasoning": "mock"
+    })):
+        await client.post("/api/tickets/", json={
+            "customer_id": cust.json()["id"],
+            "subject": "SLA filter test",
+            "description": "Testing SLA filter",
+            "priority": "low",
+        })
 
     # Filter for breached tickets (should be empty)
     resp = await client.get("/api/tickets/?sla_breached=true")
@@ -110,12 +123,15 @@ async def test_sla_recomputed_on_priority_change(client):
         "name": "SLA Recompute Test",
         "email": "sla_recompute@test.com",
     })
-    ticket = await client.post("/api/tickets/", json={
-        "customer_id": cust.json()["id"],
-        "subject": "SLA recompute test",
-        "description": "Testing SLA recompute",
-        "priority": "low",
-    })
+    with patch("app.routers.tickets.classify_ticket", new=AsyncMock(return_value={
+        "category": "general", "priority": "low", "confidence": 1.0, "reasoning": "mock"
+    })):
+        ticket = await client.post("/api/tickets/", json={
+            "customer_id": cust.json()["id"],
+            "subject": "SLA recompute test",
+            "description": "Testing SLA recompute",
+            "priority": "low",
+        })
     ticket_id = ticket.json()["id"]
     original_sla = ticket.json()["sla_due_at"]
 

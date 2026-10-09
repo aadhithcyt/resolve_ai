@@ -6,6 +6,8 @@ from ..database import get_db
 from ..models import TicketCreate, TicketUpdate, TicketResponse, MessageCreate, MessageResponse
 from ..ai import analyze_sentiment
 from ..config import SLA_TARGETS_HOURS
+from ..triage import classify_ticket
+from ..escalation import check_escalation_rules
 
 router = APIRouter(prefix="/api/tickets", tags=["tickets"])
 
@@ -40,15 +42,20 @@ async def create_ticket(ticket: TicketCreate):
         # Analyze sentiment
         sentiment_result = await analyze_sentiment(ticket.description)
 
+        # Auto-triage: classify category and priority with AI
+        triage_result = await classify_ticket(ticket.subject, ticket.description)
+        final_category = triage_result.get("category", ticket.category)
+        final_priority = triage_result.get("priority", ticket.priority)
+
         # Compute SLA
         now = datetime.now(timezone.utc)
-        sla_due = _compute_sla_due_at(ticket.priority, now)
+        sla_due = _compute_sla_due_at(final_priority, now)
 
         cursor = await db.execute(
             """INSERT INTO tickets (customer_id, subject, description, priority, category, sentiment, sla_due_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (ticket.customer_id, ticket.subject, ticket.description,
-             ticket.priority, ticket.category, sentiment_result["sentiment"],
+             final_priority, final_category, sentiment_result["sentiment"],
              sla_due.isoformat()),
         )
         ticket_id = cursor.lastrowid
