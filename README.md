@@ -1,202 +1,177 @@
 # ResolveAI — AI-Powered Customer Support Desk
 
-A lightweight, professional customer support desk with AI-powered auto-replies, sentiment analysis, SLA tracking, and email notifications.
+A production-ready customer support platform with AI-powered auto-replies, streaming agent interactions, SLA tracking, real-time collaboration, and a beautiful, color-psychology-driven interface.
 
 ## Features
 
-- **Ticket Management** — Create, view, update, and delete support tickets
-- **Customer Management** — Full CRUD for customer records
-- **AI Auto-Replies** — Generate contextual reply drafts using Groq LLM
-- **Sentiment Analysis** — Automatic sentiment tagging on incoming messages
-- **SLA Tracking** — Automatic SLA due dates by priority, breach detection, and filtering
-- **Email Notifications** — Optional SMTP alerts for new tickets, SLA breaches, and resolutions
-- **Dashboard** — Real-time stats, metrics, SLA breach count, and recent activity
-- **Conversation Threads** — Full message history per ticket
-- **Search & Filter** — Find tickets by status, priority, category, keyword, or SLA breach
-- **API Key Auth** — Optional X-API-Key header authentication
-- **Rate Limiting** — Sliding window + burst rate limiter per client
-- **Docker Support** — Dockerfile and docker-compose.yml included
-- **CI/CD** — GitHub Actions workflow for testing on Python 3.10–3.13
+### AI Agent (Core)
+- Multi-turn tool calling with 5 tools (get_ticket_info, get_customer_info, search_knowledge_base, escalate_ticket, add_ticket_note)
+- Streaming SSE output with live tool call visualization and typing animation
+- Conversation memory — remembers past interactions with customers
+- Auto-triage — AI classifies category and priority automatically
+- AI analytics — reply tracking, acceptance rate, tool usage statistics
 
-## Tech Stack
+### Ticket Management
+- Full CRUD with search, filter (status, priority, category, keyword, SLA breach)
+- SLA tracking with automatic due dates by priority (urgent 4h, high 24h, medium 48h, low 72h)
+- Escalation engine with 4 automatic rules
+- File attachments (upload, download, delete)
+- Conversation threads with real-time WebSocket chat
+- Drag-and-drop ticket assignment to agents
+- Collaborative AI reply editing
 
-| Layer     | Technology                          |
-|-----------|-------------------------------------|
-| Backend   | Python 3.10+ / FastAPI              |
-| Database  | SQLite (via aiosqlite)              |
-| AI        | Groq API (openai/gpt-oss-120b)      |
-| Email     | aiosmtplib (optional)               |
-| Frontend  | Vanilla HTML/CSS/JS (no build step) |
-| Server    | Uvicorn                             |
+### Customer Management
+- Full CRUD with email uniqueness
+- Customer portal (public API for ticket status by email)
+
+### Knowledge Base
+- CRUD with FTS5 full-text search
+- 8 sample articles pre-loaded on first run
+- AI agent searches KB before drafting replies
+
+### Notifications
+- Email (SMTP) for new tickets, SLA breaches, resolutions
+- Webhooks to Slack, Discord, Teams
+- Browser push notifications (Service Worker)
+- Real-time SSE updates in dashboard
+
+### Collaboration
+- Real-time multi-agent presence (online indicator)
+- Team @mentions with internal notes
+- Real-time customer chat (WebSocket)
+- Command palette (Ctrl+K) for quick navigation
+
+### Platform
+- Windows, Linux, macOS support
+- Docker and docker-compose
+- CI/CD with GitHub Actions (Python 3.10–3.13)
+- 197 tests covering all modules
 
 ## Quick Start
 
-### Prerequisites
+### Windows
+```cmd
+git clone https://github.com/YOUR_USERNAME/resolveai.git
+cd resolveai
+setup.bat
+set GROQ_API_KEY=your-key-here
+run.bat
+```
 
-- Python 3.10+
-- A [Groq API key](https://console.groq.com/keys) (free tier available)
-
-### Installation
-
+### Linux / macOS / RHEL
 ```bash
 git clone https://github.com/YOUR_USERNAME/resolveai.git
 cd resolveai
 chmod +x setup.sh
 ./setup.sh
-```
-
-### Configuration
-
-Set your Groq API key:
-
-```bash
-export GROQ_API_KEY="your-key-here"
-```
-
-Optional environment variables:
-
-| Variable            | Default                        | Description              |
-|---------------------|--------------------------------|--------------------------|
-| `GROQ_API_KEY`      | (required for AI features)     | Groq API key             |
-| `RESOLVEAI_DB`      | `./resolveai.db`               | SQLite database path     |
-| `RESOLVEAI_MODEL`   | `openai/gpt-oss-120b`          | Groq model to use        |
-| `RESOLVEAI_HOST`    | `127.0.0.1`                    | Server bind address      |
-| `RESOLVEAI_PORT`    | `8000`                         | Server port              |
-| `RESOLVEAI_DEBUG`   | `false`                        | Enable debug mode        |
-| `RESOLVEAI_API_KEY` | (empty = auth disabled)        | API key for X-API-Key    |
-| `RATE_LIMIT_RPM`    | `60`                           | Requests per minute      |
-| `RATE_LIMIT_BURST`  | `10`                           | Burst capacity           |
-| `EMAIL_HOST`        | (empty = email disabled)       | SMTP host                |
-| `EMAIL_PORT`        | `587`                          | SMTP port                |
-| `EMAIL_USER`        | (empty)                        | SMTP username            |
-| `EMAIL_PASSWORD`    | (empty)                        | SMTP password            |
-| `EMAIL_FROM`        | `noreply@resolveai.local`       | From address             |
-| `EMAIL_TO`          | (empty)                        | To address               |
-
-### Run
-
-```bash
-./run.sh
-```
-
-Or manually:
-
-```bash
+export GROQ_API_KEY=your-key-here
 source .venv/bin/activate
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-Open http://localhost:8000 in your browser.
-
 ### Docker
-
-```bash
-docker-compose up -d
-```
-
-Or with Docker directly:
-
 ```bash
 docker build -t resolveai .
 docker run -p 8000:8000 -e GROQ_API_KEY=your-key resolveai
 ```
 
-## API Endpoints
+## Environment Variables
 
-All endpoints (except `/health`) require `X-API-Key` header when `RESOLVEAI_API_KEY` is set.
+Copy `.env.example` to `.env` and configure:
 
-### Tickets
-- `POST /api/tickets/` — Create ticket
-- `GET /api/tickets/` — List tickets (with filters: status, priority, category, customer_id, search, sla_breached)
-- `GET /api/tickets/{id}` — Get ticket details
-- `PUT /api/tickets/{id}` — Update ticket
-- `DELETE /api/tickets/{id}` — Delete ticket
-- `GET /api/tickets/{id}/messages` — Get conversation
-- `POST /api/tickets/{id}/messages` — Add message
-- `GET /api/tickets/{id}/sla` — Get SLA details
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `GROQ_API_KEY` | Yes | — | Groq API key |
+| `RESOLVEAI_JWT_SECRET` | Recommended | Random | JWT signing secret |
+| `RESOLVEAI_API_KEY` | Recommended | — | API key for X-API-Key auth |
+| `RESOLVEAI_MODEL` | No | `openai/gpt-oss-120b` | Groq model |
+| `RESOLVEAI_HOST` | No | `127.0.0.1` | Server bind address |
+| `RESOLVEAI_PORT` | No | `8000` | Server port |
+| `RATE_LIMIT_RPM` | No | `60` | Requests per minute |
+| `RATE_LIMIT_BURST` | No | `10` | Burst capacity |
+| `EMAIL_HOST` | No | — | SMTP host |
+| `EMAIL_PORT` | No | `587` | SMTP port |
 
-### Customers
-- `POST /api/customers/` — Create customer
-- `GET /api/customers/` — List customers
-- `GET /api/customers/{id}` — Get customer
-- `PUT /api/customers/{id}` — Update customer
-- `DELETE /api/customers/{id}` — Delete customer
+See `.env.example` for the full list.
 
-### AI
-- `POST /api/ai/reply` — Generate AI reply for a ticket
-- `POST /api/ai/sentiment/{ticket_id}` — Analyze ticket sentiment
+## Tech Stack
 
-### Dashboard
-- `GET /api/dashboard/stats` — Get dashboard statistics (includes SLA breach count)
-
-### Health
-- `GET /health` — Health check (no auth required)
-
-## SLA Targets
-
-| Priority | SLA Target |
-|----------|------------|
-| Low      | 72 hours   |
-| Medium   | 48 hours   |
-| High     | 24 hours   |
-| Urgent   | 4 hours    |
-
-SLA is computed at ticket creation and recomputed when priority changes. Breached tickets are flagged automatically.
+| Layer | Technology |
+|-------|-----------|
+| Backend | Python 3.10+ / FastAPI |
+| Database | SQLite (aiosqlite + FTS5) |
+| AI | Groq API (openai/gpt-oss-120b) |
+| Auth | JWT (PyJWT) + bcrypt |
+| Real-time | SSE + WebSocket |
+| Frontend | Vanilla HTML/CSS/JS |
+| Server | Uvicorn |
 
 ## Project Structure
 
 ```
 resolveai/
 ├── app/
-│   ├── __init__.py
-│   ├── main.py              # FastAPI app entry point
-│   ├── config.py            # Settings
-│   ├── database.py          # SQLite setup
-│   ├── models.py            # Pydantic schemas
-│   ├── ai.py                # Groq AI integration
-│   ├── auth.py              # API key auth + rate limiting
-│   ├── email.py             # Email notifications
-│   ├── routers/
-│   │   ├── tickets.py       # Ticket routes (with SLA)
-│   │   ├── customers.py     # Customer routes
-│   │   ├── ai_assist.py     # AI routes
-│   │   └── dashboard.py     # Stats routes
-│   ├── static/
-│   │   ├── css/style.css
-│   │   └── js/app.js
-│   └── templates/
-│       └── index.html
-├── tests/
-│   ├── conftest.py
-│   ├── test_tickets.py
-│   ├── test_customers.py
-│   ├── test_ai.py
-│   ├── test_sla.py
-│   └── test_auth.py
-├── .github/
-│   └── workflows/ci.yml
-├── requirements.txt
-├── setup.sh
-├── run.sh
+│   ├── agent.py              # AI agent loop with tool calling
+│   ├── agent_router.py       # Agent API endpoint
+│   ├── analytics.py          # AI performance tracking
+│   ├── attachments.py        # File upload/download
+│   ├── auth.py               # API key + JWT middleware
+│   ├── cache.py              # In-memory response cache
+│   ├── chat.py               # WebSocket real-time chat
+│   ├── config.py             # Settings
+│   ├── database.py           # SQLite schema + FTS5
+│   ├── email.py              # Email notifications
+│   ├── escalation.py         # Auto-escalation rules
+│   ├── i18n.py               # Multi-language support
+│   ├── import_export.py      # JSON/CSV import/export
+│   ├── jwt_auth.py           # JWT login/register
+│   ├── main.py               # FastAPI app entry
+│   ├── memory.py             # Conversation memory
+│   ├── models.py             # Pydantic schemas
+│   ├── notifications.py      # Browser push notifications
+│   ├── portal.py           # Customer portal (public API)
+│   ├── presence.py           # Agent online presence
+│   ├── sse.py                # Server-Sent Events streaming
+│   ├── team.py               # @mentions and internal notes
+│   ├── tools.py              # Tool definitions + executor
+│   ├── triage.py             # AI auto-classification
+│   ├── webhook.py            # Slack/Discord/Teams webhooks
+│   ├── workers.py            # Background workers (SLA + email)
+│   ├── routers/              # Ticket, customer, KB, dashboard routes
+│   ├── static/               # CSS + JS frontend
+│   └── templates/            # HTML templates
+├── public/
+│   └── sw.js                 # Service worker for push notifications
+├── tests/                    # 197 tests
+├── setup.sh / setup.bat      # Cross-platform setup
+├── run.sh / run.bat          # Cross-platform run
 ├── Dockerfile
 ├── docker-compose.yml
+├── DEPLOYMENT.md             # RHEL/Windows deployment guide
+├── requirements.txt
 └── README.md
 ```
 
-## Running Tests
+## Security
+
+- bcrypt password hashing
+- JWT with 24-hour expiry
+- Timing-safe API key comparison
+- Parameterized SQL queries (no injection)
+- Pydantic input validation
+- Rate limiting (sliding window + burst)
+- File upload type whitelist + size limit
+- Security headers (X-Frame-Options, X-Content-Type-Options, etc.)
+- Role-based access control (admin/agent)
+
+## Testing
 
 ```bash
 pip install pytest pytest-asyncio httpx
 pytest tests/ -v
 ```
 
-28 tests covering tickets, customers, AI, SLA, auth, and rate limiting.
-
-## CI/CD
-
-GitHub Actions workflow runs on every push/PR to main/master:
-- Tests on Python 3.10, 3.11, 3.12, 3.13
-- Syntax check on all modules
+197 tests covering tickets, customers, AI agent, SLA, auth, KB, attachments, memory, streaming, notifications, presence, chat, and platform compatibility.
 
 ## License
 
