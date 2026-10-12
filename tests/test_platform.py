@@ -521,3 +521,61 @@ def test_imports_are_case_exact():
         "imports reference modules that do not exist with that exact case "
         f"(would fail on Windows): {offenders}"
     )
+
+
+# ─── Tunnel / reverse-proxy compatibility ───────────────────────────────────
+
+
+def test_frontend_uses_relative_urls_only():
+    """The frontend must not hardcode a host or port.
+
+    When the app is reached through an SSH tunnel, a reverse proxy, or a
+    different hostname, absolute URLs like http://localhost:8000/api/... would
+    point the browser at the wrong machine and break the UI. All requests must
+    be relative so they follow whatever address the browser used.
+    """
+    import re
+
+    root = Path(__file__).resolve().parent.parent
+    offenders = []
+    for rel in ("app/static/js/app.js", "app/templates/index.html", "public/sw.js"):
+        f = root / rel
+        if not f.exists():
+            continue
+        text = f.read_text(encoding="utf-8")
+        for m in re.finditer(r"https?://(localhost|127\.0\.0\.1|[\d.]+)(:\d+)?", text):
+            offenders.append(f"{rel}: {m.group(0)}")
+    assert not offenders, (
+        "frontend hardcodes a host/port, which breaks access via a tunnel or "
+        f"proxy: {offenders}"
+    )
+
+
+def test_websocket_url_derived_from_location():
+    """The chat WebSocket URL must be built from location.host.
+
+    A hardcoded ws://localhost:8000/... would fail whenever the page is served
+    from a different origin (tunnel, proxy, or another host), silently breaking
+    real-time chat.
+    """
+    root = Path(__file__).resolve().parent.parent
+    js = (root / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    assert "location.host" in js, (
+        "app.js should build the WebSocket URL from location.host so it works "
+        "through a tunnel or proxy"
+    )
+    assert "ws://localhost" not in js and "wss://localhost" not in js, (
+        "app.js must not hardcode a WebSocket host"
+    )
+
+
+def test_served_html_uses_root_relative_asset_paths():
+    """index.html asset references must be root-relative, not absolute URLs."""
+    import re
+
+    root = Path(__file__).resolve().parent.parent
+    html = (root / "app" / "templates" / "index.html").read_text(encoding="utf-8")
+    for m in re.finditer(r'(?:src|href)="([^"]+)"', html):
+        url = m.group(1)
+        if url.startswith(("http://", "https://", "//")):
+            raise AssertionError(f"absolute asset URL breaks tunnel access: {url}")

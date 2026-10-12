@@ -151,6 +151,74 @@ netsh advfirewall firewall add rule name="ResolveAI" dir=in action=allow protoco
 | `EMAIL_FROM` | No | `noreply@resolveai.local` | From address |
 | `EMAIL_TO` | No | (empty) | To address |
 
+## Accessing the App From Another Machine (e.g. Windows host, RHEL guest)
+
+If the server runs inside a VM (VMware/VirtualBox) and you want to open it in a
+browser on the host, the LAN IP often will not work: NAT adapters give the guest
+an address the host cannot route to. An SSH tunnel avoids the whole problem —
+no firewall change, no VM network reconfiguration.
+
+### The tunnel approach (recommended)
+
+The app is already tunnel-ready: the frontend uses only relative paths
+(`/static/...`, `/api/...`) and builds the WebSocket URL from
+`location.host`, so everything follows whatever address the browser uses.
+
+1. On the machine running the app, bind it to loopback and start it:
+
+   ```bash
+   cd /root/resolveai
+   RESOLVEAI_MODEL=openai/gpt-oss-20b python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+   ```
+
+   Binding to `127.0.0.1` (not `0.0.0.0`) is deliberate: the port stays closed
+   to the network, and the only way in is through SSH.
+
+2. On the machine you want to browse from, open the tunnel:
+
+   ```bash
+   ssh -L 8000:localhost:8000 <user>@<server-ip> -p <ssh-port>
+   ```
+
+   Check the SSH port first — it is not always 22:
+
+   ```bash
+   ss -ltn | grep ssh          # on the server
+   ```
+
+   If the server's SSH runs on a non-standard port (2222 is common), add
+   `-p 2222`. Leave this terminal open; it is holding the tunnel.
+
+3. In the browser on that machine, use:
+
+   ```
+   http://localhost:8000
+   ```
+
+   `localhost` is correct here — the tunnel makes the remote port appear as a
+   local one.
+
+### Why not just use the LAN IP?
+
+It requires three things to line up, and any one of them failing looks like a
+silent timeout:
+
+- the app bound to `0.0.0.0` instead of `127.0.0.1`
+- the port opened in the firewall (`firewall-cmd --add-port=8000/tcp`)
+- the VM network adapter set to Bridged, or a NAT port-forward rule added
+
+The tunnel needs none of these.
+
+### Other options
+
+| Method | Notes |
+|--------|-------|
+| SSH tunnel | No sudo, no firewall change, works through NAT. Best default. |
+| VM port forwarding | VMware: VM Settings > Network Adapter > NAT > Port Forwarding. Permanent, no tunnel needed. |
+| Bridged adapter | VM gets a real LAN IP. Requires VM settings change + firewall open. |
+| Browser inside the VM | Zero networking. Use if the guest has a desktop. |
+| `cloudflared tunnel --url http://localhost:8000` | Public HTTPS URL. Requires installing cloudflared; exposes the app to the internet. |
+
 ## Migrating from RHEL (or any Linux) to Windows
 
 The application itself is OS-independent: no POSIX-only modules, all paths built
