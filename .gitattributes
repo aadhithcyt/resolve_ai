@@ -1,0 +1,36 @@
+# Normalise line endings so the project works on every platform after checkout.
+#
+# Why this matters:
+#   Windows batch files (.bat/.cmd) are executed by cmd.exe, which is unreliable
+#   with LF-only line endings — labels and multi-line blocks can misbehave.
+#   Shell scripts (.sh) must keep LF, because a CRLF can make the shebang
+#   unreadable ("bad interpreter: /bin/bash^M").
+#
+# `text=auto` lets Git store LF in the repository and check out native line
+# endings on each platform.
+
+* text=auto
+
+# Shell scripts must always be LF, even on Windows checkouts (Git Bash).
+*.sh        text eol=lf
+*.bash      text eol=lf
+
+# Windows batch files must always be CRLF.
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+
+# Never touch binaries.
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.zip       binary
+*.pdf       binary
+*.db        binary
+*.ico       binary
+
+# The service worker and JSON must stay LF; some tooling is picky.
+*.js        text eol=lf
+*.json      text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf

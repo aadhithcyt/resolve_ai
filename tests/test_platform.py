@@ -394,3 +394,130 @@ def test_requirements_have_no_platform_specific_pins():
     lowered = text.lower()
     for bad in ("win32", "manylinux", "macosx", "platform_system"):
         assert bad not in lowered, f"requirements.txt contains platform pin: {bad}"
+
+
+def test_gitattributes_exists_and_pins_line_endings():
+    """A .gitattributes must exist and pin per-extension line endings.
+
+    Without it, a Windows checkout can end up with LF-only .bat files (which
+    cmd.exe mishandles) or CRLF .sh files (which break the shebang with
+    "bad interpreter: /bin/bash^M").
+    """
+    root = Path(__file__).resolve().parent.parent
+    ga = root / ".gitattributes"
+    assert ga.exists(), ".gitattributes is missing - line endings are not normalised"
+    text = ga.read_text(encoding="utf-8")
+    assert "*.bat" in text and "eol=crlf" in text, ".bat must be pinned to CRLF"
+    assert "*.sh" in text and "eol=lf" in text, ".sh must be pinned to LF"
+
+
+def test_bat_files_use_crlf_line_endings():
+    """Windows batch files must use CRLF, not bare LF.
+
+    cmd.exe is unreliable with LF-only batch files: multi-line blocks and
+    labels can misbehave in ways that are hard to diagnose.
+    """
+    root = Path(__file__).resolve().parent.parent
+    for name in ("setup.bat", "run.bat"):
+        data = (root / name).read_bytes()
+        assert b"\r\n" in data, f"{name} must use CRLF line endings for cmd.exe"
+        # A bare LF that is not part of CRLF would indicate mixed endings.
+        stripped = data.replace(b"\r\n", b"")
+        assert b"\n" not in stripped, f"{name} has mixed line endings"
+
+
+def test_shell_scripts_use_lf_line_endings():
+    """Shell scripts must use LF; CRLF breaks the shebang on Linux."""
+    root = Path(__file__).resolve().parent.parent
+    for name in ("setup.sh", "run.sh"):
+        data = (root / name).read_bytes()
+        assert b"\r\n" not in data, (
+            f"{name} contains CRLF - the shebang will fail on Linux/macOS "
+            'with "bad interpreter"'
+        )
+
+
+def test_no_case_insensitive_filename_collisions():
+    """No two tracked files may differ only by case.
+
+    Windows filesystems are case-insensitive, so app/Foo.py and app/foo.py
+    cannot coexist and a clone would fail or silently drop one.
+    """
+    import subprocess
+    root = Path(__file__).resolve().parent.parent
+    out = subprocess.run(
+        ["git", "ls-files"], cwd=root, capture_output=True, text=True
+    ).stdout.splitlines()
+    if not out:
+        pytest.skip("not a git checkout")
+    lowered = [f.lower() for f in out]
+    dupes = {f for f in lowered if lowered.count(f) > 1}
+    assert not dupes, f"files differing only by case break Windows: {sorted(dupes)}"
+
+
+def test_no_windows_reserved_filenames():
+    """No tracked file may use a Windows reserved device name."""
+    import subprocess
+    root = Path(__file__).resolve().parent.parent
+    out = subprocess.run(
+        ["git", "ls-files"], cwd=root, capture_output=True, text=True
+    ).stdout.splitlines()
+    if not out:
+        pytest.skip("not a git checkout")
+    reserved = {"CON", "PRN", "AUX", "NUL"} | {f"COM{i}" for i in range(1, 10)} | {
+        f"LPT{i}" for i in range(1, 10)
+    }
+    bad = []
+    for f in out:
+        stem = Path(f).name.split(".")[0].upper()
+        if stem in reserved:
+            bad.append(f)
+    assert not bad, f"Windows reserved device names cannot be created: {bad}"
+
+
+def test_no_windows_illegal_characters_in_filenames():
+    """Filenames must not contain characters Windows forbids: : * ? " < > |"""
+    import subprocess
+    root = Path(__file__).resolve().parent.parent
+    out = subprocess.run(
+        ["git", "ls-files"], cwd=root, capture_output=True, text=True
+    ).stdout.splitlines()
+    if not out:
+        pytest.skip("not a git checkout")
+    illegal = set(': * ? " < > |')
+    bad = [f for f in out if any(ch in illegal for ch in f)]
+    assert not bad, f"filenames contain characters illegal on Windows: {bad}"
+
+
+def test_imports_are_case_exact():
+    """Module imports must match the real filename's case.
+
+    On Linux, `from .Models import X` would resolve to models.py; on Windows it
+    would not, or would resolve to a different file. Check that every
+    intra-package import names an existing module with exact case.
+    """
+    import re
+    offenders = []
+    for path in _python_files():
+        text = path.read_text(encoding="utf-8")
+        for m in re.finditer(r"^from\s+([.\w]+)\s+import\s", text, re.M):
+            mod = m.group(1)
+            if not mod.startswith("."):
+                continue
+            # Relative import: walk the dotted segments from the file's own
+            # package directory. A multi-segment module like ".routers.kb"
+            # lives at app/routers/kb.py, not app/kb.py.
+            dots = len(mod) - len(mod.lstrip("."))
+            parts = mod.lstrip(".").split(".") if mod.lstrip(".") else []
+            if not parts:
+                continue
+            base = path.parent
+            for _ in range(dots - 1):          # one dot = current package
+                base = base.parent
+            target = base.joinpath(*parts)
+            if not (target.with_suffix(".py").exists() or (target / "__init__.py").exists()):
+                offenders.append(f"{path.name}: from {mod} import ...")
+    assert not offenders, (
+        "imports reference modules that do not exist with that exact case "
+        f"(would fail on Windows): {offenders}"
+    )
