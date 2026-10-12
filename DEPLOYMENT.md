@@ -80,20 +80,64 @@ sudo firewall-cmd --reload
 
 ### Run as Systemd Service
 
+**Important — SELinux on RHEL:** systemd runs in the `init_t` domain, which is
+NOT allowed to read or execute files under `/root` (labelled `admin_home_t`).
+If your venv lives under `/root`, the service fails in a restart loop with
+`status=203/EXEC ... Permission denied` *even when running as root*, and
+`journalctl -u resolveai` shows `Failed to load environment files: Permission
+denied`. Confirm with `getenforce` (Enforcing) and see the exact file with:
+
+```bash
+ausearch -m avc -ts recent | grep denied
+```
+
+So: keep the **venv outside `/root`** and the **secrets in `/etc/sysconfig`**.
+
+ResolveAI needs Python 3.10+ (the test suite asserts it). RHEL 9 ships 3.9 and
+this host is not subscribed to RHEL repos, so install a standalone 3.14 build
+and put it OUTSIDE `/root` (a venv built on a `/root` interpreter re-triggers the
+SELinux denial above):
+
+```bash
+# Standalone interpreter (this host uses a relocatable 3.14 build).
+cp -a /path/to/python-3.14.x-linux-x64 /opt/python3.14
+restorecon -Rv /opt/python3.14          # ensure bin_t / lib_t labels
+
+/opt/python3.14/bin/python3.14 -m venv /opt/resolveai-venv314
+/opt/resolveai-venv314/bin/pip install -r /opt/resolveai/requirements.txt
+
+# Verify: the resolved interpreter must be labelled bin_t, NOT admin_home_t.
+readlink -f /opt/resolveai-venv314/bin/python
+ls -laZ "$(readlink -f /opt/resolveai-venv314/bin/python)"
+```
+
+Create the environment file (mode 600) — do not commit this:
+
+```bash
+printf 'GROQ_API_KEY=%s\n' "$GROQ_API_KEY" | sudo tee /etc/sysconfig/resolveai >/dev/null
+sudo chmod 600 /etc/sysconfig/resolveai
+sudo restorecon -v /etc/sysconfig/resolveai
+```
+
 Create `/etc/systemd/system/resolveai.service`:
 
 ```ini
 [Unit]
-Description=ResolveAI Customer Support Desk
-After=network.target
+Description=ResolveAI - AI-powered customer support desk
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-User=resolveai
 WorkingDirectory=/opt/resolveai
-ExecStart=/opt/resolveai/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-Restart=always
-RestartSec=10
+EnvironmentFile=/etc/sysconfig/resolveai
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/resolveai-venv314/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=resolveai
 
 [Install]
 WantedBy=multi-user.target
@@ -103,10 +147,19 @@ Enable and start:
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable resolveai
-sudo systemctl start resolveai
+sudo systemctl enable --now resolveai
 sudo systemctl status resolveai
+curl http://localhost:8000/health
 ```
+
+Verify the service can actually WRITE, not just answer `/health` — create a
+record through the API and read it back, then confirm `ausearch -m avc -ts
+recent | grep denied` shows nothing new.
+
+The `resolveai` launcher drives this service: `resolveai` (ensure it is up),
+`resolveai start|stop|restart|status|logs`, and `resolveai PORT` for a one-off
+foreground server on a spare port (do not use 8000 while the service is up — you
+will get "address already in use").
 
 ## Windows-Specific Setup
 
@@ -167,7 +220,7 @@ The app is already tunnel-ready: the frontend uses only relative paths
 1. On the machine running the app, bind it to loopback and start it:
 
    ```bash
-   cd /root/resolveai
+   cd /opt/resolveai
    RESOLVEAI_MODEL=openai/gpt-oss-20b python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
    ```
 

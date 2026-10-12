@@ -1,0 +1,25 @@
+[Unit]
+Description=ResolveAI - AI-powered customer support desk
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=resolveai
+Group=resolveai
+WorkingDirectory=/opt/resolveai
+EnvironmentFile=/etc/sysconfig/resolveai
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/resolveai-venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=resolveai
+
+# Light hardening - the app only needs to read/write its own directory.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

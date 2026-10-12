@@ -20,3 +20,6 @@ htmlcov/
 # Uploaded files (tests write here; keep only the placeholder)
 uploads/*
 !uploads/.gitkeep
+
+# Internal development report (not for public repo)
+report.txt

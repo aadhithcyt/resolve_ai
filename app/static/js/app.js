@@ -15,6 +15,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupHamburgerMenu();
     initNotifications();
     startPresence();
+    setupRipple();
     loadDashboard();
 });
 
@@ -43,8 +44,7 @@ function setupNavigation() {
         btn.addEventListener('click', () => {
             document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
-            currentView = btn.dataset.view;
-            render();
+            transitionToView(btn.dataset.view);
         });
     });
 }
@@ -58,6 +58,56 @@ function render() {
         case 'knowledge': loadKnowledge(); break;
         case 'analytics': loadAnalytics(); break;
     }
+}
+
+// ─── Ripple Effect ───────────────────────────────────────────────────────────
+function setupRipple() {
+    document.addEventListener('click', (e) => {
+        const btn = e.target.closest('.btn, .btn-primary, .btn-accent, .icon-btn, .nav-btn');
+        if (!btn) return;
+        const rect = btn.getBoundingClientRect();
+        const x = ((e.clientX - rect.left) / rect.width) * 100;
+        const y = ((e.clientY - rect.top) / rect.height) * 100;
+        btn.style.setProperty('--ripple-x', x + '%');
+        btn.style.setProperty('--ripple-y', y + '%');
+        // Force reflow then reset for next click
+        void btn.offsetWidth;
+    });
+}
+
+// ─── Animated Counter ────────────────────────────────────────────────────────
+function animateCounter(el, target, duration = 800) {
+    if (!el) return;
+    const start = 0;
+    const startTime = performance.now();
+    function update(now) {
+        const elapsed = now - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+        // Ease out cubic
+        const eased = 1 - Math.pow(1 - progress, 3);
+        const current = Math.round(start + (target - start) * eased);
+        el.textContent = current;
+        if (progress < 1) {
+            requestAnimationFrame(update);
+        }
+    }
+    requestAnimationFrame(update);
+}
+
+// ─── Smooth View Transition ──────────────────────────────────────────────────
+function transitionToView(newView) {
+    const main = document.getElementById('main-content');
+    // Fade out
+    main.style.opacity = '0';
+    main.style.transform = 'translateY(8px)';
+    main.style.transition = 'opacity 0.15s ease, transform 0.15s ease';
+    setTimeout(() => {
+        currentView = newView;
+        render();
+        // Fade in
+        main.style.opacity = '1';
+        main.style.transform = 'translateY(0)';
+    }, 150);
 }
 
 // API helpers
@@ -93,31 +143,31 @@ async function loadDashboard() {
             <div class="stats-grid">
                 <div class="stat-card">
                     <div class="label">Total Tickets</div>
-                    <div class="value">${stats.total_tickets}</div>
+                    <div class="value" id="stat-total">${stats.total_tickets}</div>
                 </div>
                 <div class="stat-card">
                     <div class="label">Open</div>
-                    <div class="value open">${stats.open_tickets}</div>
+                    <div class="value open" id="stat-open">${stats.open_tickets}</div>
                 </div>
                 <div class="stat-card">
                     <div class="label">In Progress</div>
-                    <div class="value in-progress">${stats.in_progress_tickets}</div>
+                    <div class="value in-progress" id="stat-progress">${stats.in_progress_tickets}</div>
                 </div>
                 <div class="stat-card">
                     <div class="label">Resolved</div>
-                    <div class="value resolved">${stats.resolved_tickets}</div>
+                    <div class="value resolved" id="stat-resolved">${stats.resolved_tickets}</div>
                 </div>
                 <div class="stat-card">
                     <div class="label">Closed</div>
-                    <div class="value closed">${stats.closed_tickets}</div>
+                    <div class="value closed" id="stat-closed">${stats.closed_tickets}</div>
                 </div>
                 <div class="stat-card">
                     <div class="label">Avg Resolution</div>
-                    <div class="value">${stats.avg_resolution_hours ? stats.avg_resolution_hours + 'h' : 'N/A'}</div>
+                    <div class="value" id="stat-avg">${stats.avg_resolution_hours ? stats.avg_resolution_hours + 'h' : 'N/A'}</div>
                 </div>
                 <div class="stat-card">
                     <div class="label">SLA Breached</div>
-                    <div class="value sla-breached">${stats.sla_breached || 0}</div>
+                    <div class="value sla-breached" id="stat-sla">${stats.sla_breached || 0}</div>
                 </div>
             </div>
             <div class="card">
@@ -154,6 +204,13 @@ async function loadDashboard() {
                 </div>
             </div>
         `;
+        // Animate counters
+        animateCounter(document.getElementById('stat-total'), stats.total_tickets);
+        animateCounter(document.getElementById('stat-open'), stats.open_tickets);
+        animateCounter(document.getElementById('stat-progress'), stats.in_progress_tickets);
+        animateCounter(document.getElementById('stat-resolved'), stats.resolved_tickets);
+        animateCounter(document.getElementById('stat-closed'), stats.closed_tickets);
+        animateCounter(document.getElementById('stat-sla'), stats.sla_breached || 0);
     } catch (e) {
         main.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><p>Error: ${esc(e.message)}</p></div>`;
     }
