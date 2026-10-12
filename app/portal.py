@@ -2,6 +2,7 @@
 from fastapi import APIRouter, HTTPException, Query
 from typing import List, Optional
 from pydantic import BaseModel
+from .config import parse_ts
 from .database import get_db
 
 router = APIRouter(prefix="/api/portal", tags=["customer_portal"])
@@ -51,7 +52,7 @@ async def get_customer_tickets(email: str = Query(..., description="Customer ema
             t["sla_breached"] = False
             if t.get("sla_due_at") and t["status"] not in ("resolved", "closed"):
                 try:
-                    sla_due = datetime.fromisoformat(t["sla_due_at"].replace("Z", "+00:00"))
+                    sla_due = parse_ts(t["sla_due_at"])
                     t["sla_breached"] = now > sla_due
                 except (ValueError, TypeError):
                     pass
@@ -79,7 +80,7 @@ async def get_customer_ticket(ticket_id: int, email: str = Query(..., descriptio
             try:
                 from datetime import datetime, timezone
                 now = datetime.now(timezone.utc)
-                sla_due = datetime.fromisoformat(ticket["sla_due_at"].replace("Z", "+00:00"))
+                sla_due = parse_ts(ticket["sla_due_at"])
                 ticket["sla_breached"] = now > sla_due
             except (ValueError, TypeError):
                 pass

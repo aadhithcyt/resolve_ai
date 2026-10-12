@@ -16,6 +16,7 @@ from .config import (
     EMAIL_PASSWORD,
     EMAIL_FROM,
     EMAIL_TO,
+    parse_ts,
 )
 from .database import get_db
 from .email import notify_sla_breach, send_email
@@ -52,15 +53,21 @@ async def _mark_sla_breached(ticket_id: int) -> None:
     """Mark a ticket as SLA breached."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "UPDATE tickets SET sla_breached = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (ticket_id,),
+            "UPDATE tickets SET sla_breached = 1, updated_at = ? WHERE id = ?",
+            (datetime.now(timezone.utc).isoformat(), ticket_id),
         )
         await db.commit()
 
 
 async def _send_sla_breach_notification(ticket: dict) -> bool:
     """Send SLA breach notification email."""
-    sla_due = datetime.fromisoformat(ticket["sla_due_at"])
+    # parse_ts handles both naive SQLite timestamps and aware ISO strings.
+    # Previously this raised TypeError on the Windows path (where SQLite writes
+    # naive values), which killed the whole scanner iteration before the ticket
+    # could be marked breached.
+    sla_due = parse_ts(ticket["sla_due_at"])
+    if sla_due is None:
+        return False
     now = datetime.now(timezone.utc)
     hours_overdue = (now - sla_due).total_seconds() / 3600
 
@@ -121,8 +128,11 @@ async def _fetch_unseen_emails() -> list[dict]:
 
     emails = []
     try:
-        # Run blocking IMAP operations in a thread pool
-        loop = asyncio.get_event_loop()
+        # Run blocking IMAP operations in a thread pool.
+        # asyncio.get_running_loop() is the correct call inside a coroutine;
+        # get_event_loop() is deprecated (Python 3.12+) and raises when no loop
+        # is running, which would break this worker.
+        loop = asyncio.get_running_loop()
         emails = await loop.run_in_executor(None, _imap_fetch_unseen)
     except Exception as e:
         logger.error(f"Error fetching emails from IMAP: {e}")
@@ -242,10 +252,20 @@ async def _create_ticket_from_email(email_data: dict) -> Optional[dict]:
 
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        # Write an explicit aware UTC timestamp and a real SLA deadline instead
+        # of relying on SQLite's CURRENT_TIMESTAMP. That keeps email-created
+        # tickets consistent with API-created ones (which compute sla_due_at
+        # from priority) and avoids naive-vs-aware datetime bugs downstream.
+        from .routers.tickets import _compute_sla_due_at
+
+        now = datetime.now(timezone.utc)
+        sla_due = _compute_sla_due_at("medium", now)
         cursor = await db.execute(
-            """INSERT INTO tickets (customer_id, subject, description, priority, category)
-               VALUES (?, ?, ?, ?, ?)""",
-            (customer_id, subject, body, "medium", "email"),
+            """INSERT INTO tickets
+               (customer_id, subject, description, priority, category, created_at, updated_at, sla_due_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (customer_id, subject, body, "medium", "email",
+             now.isoformat(), now.isoformat(), sla_due.isoformat()),
         )
         ticket_id = cursor.lastrowid
 

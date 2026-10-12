@@ -5,7 +5,7 @@ from typing import List, Optional
 from ..database import get_db
 from ..models import TicketCreate, TicketUpdate, TicketResponse, MessageCreate, MessageResponse
 from ..ai import analyze_sentiment
-from ..config import SLA_TARGETS_HOURS
+from ..config import SLA_TARGETS_HOURS, parse_ts
 from ..triage import classify_ticket
 from ..escalation import check_escalation_rules
 
@@ -70,7 +70,7 @@ async def create_ticket(ticket: TicketCreate):
         row = await db.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,))
         ticket_data = dict(await row.fetchone())
         ticket_data["sla_breached"] = _is_sla_breached(
-            datetime.fromisoformat(ticket_data["sla_due_at"]),
+            parse_ts(ticket_data["sla_due_at"]),
             ticket_data["status"],
             now,
         )
@@ -118,7 +118,7 @@ async def list_tickets(
         for r in rows:
             t = dict(r)
             t["sla_breached"] = _is_sla_breached(
-                datetime.fromisoformat(t["sla_due_at"]) if t.get("sla_due_at") else None,
+                parse_ts(t.get("sla_due_at")),
                 t["status"],
                 now,
             )
@@ -137,7 +137,7 @@ async def get_ticket(ticket_id: int):
             raise HTTPException(status_code=404, detail="Ticket not found")
         ticket_data = dict(row)
         ticket_data["sla_breached"] = _is_sla_breached(
-            datetime.fromisoformat(ticket_data["sla_due_at"]) if ticket_data.get("sla_due_at") else None,
+            parse_ts(ticket_data.get("sla_due_at")),
             ticket_data["status"],
             datetime.now(timezone.utc),
         )
@@ -169,12 +169,18 @@ async def update_ticket(ticket_id: int, ticket: TicketUpdate):
             fields.append("sla_due_at = ?")
             values.append(sla_due.isoformat())
 
-        # Set resolved_at when status changes to resolved
+        # Set resolved_at when status changes to resolved.
+        # Use an aware UTC ISO string, not CURRENT_TIMESTAMP: the SLA report
+        # compares resolved_at <= sla_due_at as strings, and a naive
+        # "YYYY-MM-DD HH:MM:SS" sorts differently from an aware
+        # "YYYY-MM-DDTHH:MM:SS+00:00" at the same instant.
         if ticket.status == "resolved":
-            fields.append("resolved_at = CURRENT_TIMESTAMP")
+            fields.append("resolved_at = ?")
+            values.append(datetime.now(timezone.utc).isoformat())
 
         if fields:
-            fields.append("updated_at = CURRENT_TIMESTAMP")
+            fields.append("updated_at = ?")
+            values.append(datetime.now(timezone.utc).isoformat())
             values.append(ticket_id)
             await db.execute(
                 f"UPDATE tickets SET {', '.join(fields)} WHERE id = ?", values
@@ -184,7 +190,7 @@ async def update_ticket(ticket_id: int, ticket: TicketUpdate):
         cursor = await db.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,))
         ticket_data = dict(await cursor.fetchone())
         ticket_data["sla_breached"] = _is_sla_breached(
-            datetime.fromisoformat(ticket_data["sla_due_at"]) if ticket_data.get("sla_due_at") else None,
+            parse_ts(ticket_data.get("sla_due_at")),
             ticket_data["status"],
             datetime.now(timezone.utc),
         )
@@ -241,7 +247,7 @@ async def get_ticket_sla(ticket_id: int):
             raise HTTPException(status_code=404, detail="Ticket not found")
 
         data = dict(row)
-        sla_due = datetime.fromisoformat(data["sla_due_at"]) if data.get("sla_due_at") else None
+        sla_due = parse_ts(data.get("sla_due_at"))
         now = datetime.now(timezone.utc)
         breached = _is_sla_breached(sla_due, data["status"], now)
         hours_remaining = None

@@ -209,8 +209,8 @@ async def escalate_ticket(ticket_id: int, reason: str, new_priority: str) -> dic
         sla_due = _compute_sla_due_at(new_priority, now)
 
         await db.execute(
-            "UPDATE tickets SET priority = ?, sla_due_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (new_priority, sla_due.isoformat(), ticket_id)
+            "UPDATE tickets SET priority = ?, sla_due_at = ?, updated_at = ? WHERE id = ?",
+            (new_priority, sla_due.isoformat(), now.isoformat(), ticket_id)
         )
         await db.commit()
 

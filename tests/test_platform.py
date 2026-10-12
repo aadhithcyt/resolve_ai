@@ -1,10 +1,32 @@
-"""Tests for cross-platform compatibility (RHEL, Windows, macOS)."""
+"""Tests for cross-platform compatibility (RHEL, Windows, macOS).
+
+These tests are intentionally strict: they must FAIL if the codebase would break
+on Windows, not merely pass on Linux. The original version of this file only
+checked that pathlib was used and that no hardcoded paths appeared, which would
+still pass on a codebase that was broken on Windows for other reasons.
+
+The classes of real Windows breakage covered here:
+  1. Text file I/O without an explicit encoding -> UnicodeDecodeError, because
+     Windows defaults to cp1252 rather than UTF-8.
+  2. Deprecated asyncio.get_event_loop() -> errors when no loop is running.
+  3. POSIX-only imports (fcntl, pwd, termios, resource, ...) -> ImportError.
+  4. os.path string concatenation instead of pathlib.
+  5. Naive vs aware datetime arithmetic -> TypeError (this bit us in
+     production: it silently disabled an escalation rule).
+"""
+import ast
 import os
 import sys
 import platform
 from pathlib import Path
 
 import pytest
+
+APP_DIR = Path(__file__).resolve().parent.parent / "app"
+
+
+def _python_files():
+    return sorted(APP_DIR.rglob("*.py"))
 
 
 def test_paths_use_pathlib():
@@ -25,7 +47,6 @@ def test_uploads_dir_creation():
     """Uploads directory should be created if it doesn't exist."""
     from app.config import BASE_DIR
     uploads_dir = BASE_DIR / "uploads"
-    # Don't actually create in test, just verify the path is valid
     assert "uploads" in str(uploads_dir)
 
 
@@ -34,7 +55,6 @@ def test_no_hardcoded_unix_paths():
     import inspect
     import app.config
     source = inspect.getsource(app.config)
-    # The config should use env vars or relative paths, not absolute Unix paths
     assert "/root/" not in source
     assert "/home/" not in source
     assert 'C:\\' not in source
@@ -78,16 +98,28 @@ def test_python_version():
 
 
 def test_env_var_override(tmp_path):
-    """Database path should be overridable via env var."""
-    os.environ["RESOLVEAI_DB"] = str(tmp_path / "test.db")
-    # Need to reimport to pick up new env var
+    """Database path should be overridable via env var.
+
+    Restores the original value with os.environ.pop() rather than assigning "".
+    Setting the variable to an empty string is NOT the same as unsetting it --
+    os.getenv(key, default) returns "" when the key exists but is empty, so
+    leaving "" behind overrode the test database path for every later test that
+    opened a connection (which is exactly what broke this file before).
+    """
     import importlib
     import app.config
-    importlib.reload(app.config)
-    assert str(tmp_path / "test.db") in str(app.config.DB_PATH)
-    # Reset
-    os.environ["RESOLVEAI_DB"] = ""
-    importlib.reload(app.config)
+
+    original = os.environ.get("RESOLVEAI_DB")
+    os.environ["RESOLVEAI_DB"] = str(tmp_path / "test.db")
+    try:
+        importlib.reload(app.config)
+        assert str(tmp_path / "test.db") in str(app.config.DB_PATH)
+    finally:
+        if original is None:
+            os.environ.pop("RESOLVEAI_DB", None)
+        else:
+            os.environ["RESOLVEAI_DB"] = original
+        importlib.reload(app.config)
 
 
 def test_file_operations_cross_platform(tmp_path):
@@ -105,6 +137,260 @@ def test_path_join_cross_platform():
     from app.config import BASE_DIR
     subdir = BASE_DIR / "app" / "routers"
     assert subdir.is_dir()
-    # Should work regardless of OS path separator
     assert "app" in str(subdir)
     assert "routers" in str(subdir)
+
+
+# ─── Windows-specific breakage classes ──────────────────────────────────────
+
+
+def test_no_posix_only_module_imports():
+    """No module may import a POSIX-only library, which fails on Windows."""
+    posix_only = {
+        "fcntl", "pwd", "grp", "termios", "resource", "crypt",
+        "pty", "tty", "syslog", "posix", "nis", "spwd", "ossaudiodev",
+    }
+    offenders = []
+    for path in _python_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    root = alias.name.split(".")[0]
+                    if root in posix_only:
+                        offenders.append(f"{path.name}: import {alias.name}")
+            elif isinstance(node, ast.ImportFrom):
+                root = (node.module or "").split(".")[0]
+                if root in posix_only:
+                    offenders.append(f"{path.name}: from {node.module} import ...")
+    assert not offenders, f"POSIX-only imports break Windows: {offenders}"
+
+
+def test_text_file_io_declares_encoding():
+    """Every text-mode open() must pass an explicit encoding.
+
+    Windows defaults text-mode I/O to cp1252, so reading or writing UTF-8
+    content (the i18n module holds Chinese, German and French strings) raises
+    UnicodeDecodeError there while working fine on Linux. Binary mode ("rb"/"wb")
+    is exempt because it performs no decoding.
+    """
+    offenders = []
+    for path in _python_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and getattr(node.func, "id", "") == "open"):
+                continue
+            mode = None
+            has_encoding = any(kw.arg == "encoding" for kw in node.keywords)
+            if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
+                mode = node.args[1].value
+            for kw in node.keywords:
+                if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
+                    mode = kw.value.value
+            if mode is not None and "b" in str(mode):
+                continue  # binary mode: no decoding happens
+            if not has_encoding:
+                offenders.append(f"{path.name}:{node.lineno}")
+    assert not offenders, (
+        "open() in text mode without encoding= will fail on Windows (cp1252): "
+        f"{offenders}"
+    )
+
+
+def test_no_deprecated_get_event_loop():
+    """asyncio.get_event_loop() is deprecated and raises with no running loop.
+
+    Use asyncio.get_running_loop() inside coroutines. Checked on the AST so that
+    mentions in comments and docstrings (including the warning comment that
+    explains this very rule) are not false positives.
+    """
+    offenders = []
+    for path in _python_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get_event_loop"
+                and getattr(node.func.value, "id", "") == "asyncio"
+            ):
+                offenders.append(f"{path.name}:{node.lineno}")
+    assert not offenders, (
+        f"asyncio.get_event_loop() is deprecated; use get_running_loop(): {offenders}"
+    )
+
+
+def test_no_os_path_string_concatenation():
+    """Paths must be built with pathlib, not os.path.join or manual joining."""
+    offenders = []
+    for path in _python_files():
+        source = path.read_text(encoding="utf-8")
+        if "os.path.join(" in source:
+            offenders.append(path.name)
+    assert not offenders, f"Use pathlib instead of os.path.join: {offenders}"
+
+
+# ─── Timezone handling (naive vs aware datetimes) ───────────────────────────
+
+
+def test_parse_ts_handles_sqlite_naive_timestamp():
+    """parse_ts must convert SQLite's naive format to an aware UTC datetime."""
+    from app.config import parse_ts
+    from datetime import timezone
+
+    naive = parse_ts("2026-10-12 15:48:29")
+    assert naive is not None
+    assert naive.tzinfo is not None
+    assert naive.utcoffset() == timezone.utc.utcoffset(None)
+
+
+def test_parse_ts_handles_aware_iso_string():
+    """parse_ts must accept the aware ISO format the app writes."""
+    from app.config import parse_ts
+    aware = parse_ts("2026-10-12T15:48:29+00:00")
+    assert aware is not None
+    assert aware.tzinfo is not None
+
+
+def test_parse_ts_handles_zulu_and_none():
+    """parse_ts must handle a trailing Z, None, and junk without raising."""
+    from app.config import parse_ts
+    assert parse_ts("2026-10-12T15:48:29Z") is not None
+    assert parse_ts(None) is None
+    assert parse_ts("") is None
+    assert parse_ts("not a date") is None
+
+
+def test_timestamps_are_comparable_across_formats():
+    """A naive SQLite timestamp and an aware ISO timestamp must be subtractable."""
+    from app.config import parse_ts
+    from datetime import datetime, timezone
+
+    a = parse_ts("2026-10-12 15:48:29")           # naive, from SQLite
+    b = datetime.now(timezone.utc)                 # aware, from the app
+    delta = (b - a).total_seconds()                # must not raise TypeError
+    assert isinstance(delta, float)
+
+
+def test_no_raw_fromisoformat_on_stored_timestamps():
+    """Stored timestamps must be parsed with parse_ts, not datetime.fromisoformat.
+
+    Mixing the two formats caused a real bug: an escalation rule silently never
+    fired because a TypeError was swallowed by a broad except clause.
+    """
+    # config.parse_ts() is the single sanctioned place that calls
+    # datetime.fromisoformat on a stored value; everything else must go through it.
+    allowed = {"config.py"}
+    offenders = []
+    for path in _python_files():
+        if path.name in allowed:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "fromisoformat"
+                and getattr(node.func.value, "id", "") == "datetime"
+            ):
+                offenders.append(f"{path.name}:{node.lineno}")
+    assert not offenders, (
+        "Use config.parse_ts() for stored timestamps (handles naive SQLite "
+        f"values): {offenders}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_escalation_rule_3_fires_for_stale_ticket():
+    """Escalation Rule 3 must actually escalate a 48h+ ticket with no reply.
+
+    Regression test: this rule was dead because the datetime subtraction raised
+    TypeError and the broad except swallowed it.
+    """
+    from app.database import get_db
+    from app.escalation import check_escalation_rules
+
+    async with get_db() as db:
+        cur = await db.execute(
+            "INSERT INTO customers (name, email) VALUES (?, ?)",
+            ("Stale Cust", "stale@test.com"),
+        )
+        cid = cur.lastrowid
+        # created_at in SQLite's naive format, 72 hours ago
+        await db.execute(
+            """INSERT INTO tickets
+               (customer_id, subject, description, priority, status, created_at)
+               VALUES (?, ?, ?, 'medium', 'open', datetime('now', '-72 hours'))""",
+            (cid, "Stale ticket", "nobody replied"),
+        )
+        await db.commit()
+        cur = await db.execute("SELECT id FROM tickets")
+        tid = (await cur.fetchone())["id"]
+
+    result = await check_escalation_rules(tid)
+    assert result is not None, (
+        "Rule 3 did not fire: a 72h-old open ticket with no agent reply should "
+        "escalate to high"
+    )
+    assert result["new_priority"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_email_created_ticket_has_sla_deadline():
+    """Tickets created from email must get a real sla_due_at, like API ones."""
+    from app.database import get_db
+    from app.workers import _create_ticket_from_email
+
+    await _create_ticket_from_email({
+        "from": "newperson@example.com",
+        "from_header": "New Person <newperson@example.com>",
+        "subject": "Help me",
+        "body": "I need assistance",
+        "date": "",
+        "message_id": "<x@y>",
+    })
+    async with get_db() as db:
+        cur = await db.execute(
+            "SELECT sla_due_at, created_at FROM tickets ORDER BY id DESC LIMIT 1"
+        )
+        row = dict(await cur.fetchone())
+    assert row["sla_due_at"] is not None, "email-created ticket has no SLA deadline"
+    assert row["created_at"] is not None
+
+    from app.config import parse_ts
+    assert parse_ts(row["sla_due_at"]) is not None
+    assert parse_ts(row["created_at"]) is not None
+
+
+# ─── Script / packaging checks ──────────────────────────────────────────────
+
+
+def test_windows_scripts_exist_and_are_nonempty():
+    """Both .bat scripts must exist for Windows users."""
+    root = Path(__file__).resolve().parent.parent
+    for name in ("setup.bat", "run.bat"):
+        f = root / name
+        assert f.exists(), f"{name} is missing"
+        assert f.stat().st_size > 0, f"{name} is empty"
+
+
+def test_unix_scripts_have_shebang_and_venv_guard():
+    """Shell scripts need a shebang, and run.sh must not hard-fail on no venv."""
+    root = Path(__file__).resolve().parent.parent
+    for name in ("setup.sh", "run.sh"):
+        text = (root / name).read_text(encoding="utf-8")
+        assert text.startswith("#!"), f"{name} lacks a shebang"
+    run_sh = (root / "run.sh").read_text(encoding="utf-8")
+    assert "Scripts/activate" in run_sh, (
+        "run.sh should handle the Windows venv layout (.venv/Scripts/activate) "
+        "so it works under Git Bash"
+    )
+
+
+def test_requirements_have_no_platform_specific_pins():
+    """No dependency may be pinned to a platform-specific build."""
+    root = Path(__file__).resolve().parent.parent
+    text = (root / "requirements.txt").read_text(encoding="utf-8")
+    lowered = text.lower()
+    for bad in ("win32", "manylinux", "macosx", "platform_system"):
+        assert bad not in lowered, f"requirements.txt contains platform pin: {bad}"

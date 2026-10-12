@@ -118,11 +118,19 @@ async def import_tickets(file: UploadFile = File(...)):
                     errors.append(f"Item {i}: subject and description are required")
                     continue
 
+                # Compute a real SLA deadline from the priority, and write aware
+                # UTC timestamps. Imported tickets must behave like normal ones.
+                from .routers.tickets import _compute_sla_due_at
+
+                _now = datetime.now(timezone.utc)
+                _sla_due = _compute_sla_due_at(priority, _now)
                 await db.execute(
-                    """INSERT INTO tickets (customer_id, subject, description, priority, category, status, sla_due_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    """INSERT INTO tickets
+                       (customer_id, subject, description, priority, category, status,
+                        created_at, updated_at, sla_due_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (customer_id, subject, description, priority, category, status,
-                     (datetime.now(timezone.utc)).isoformat()),
+                     _now.isoformat(), _now.isoformat(), _sla_due.isoformat()),
                 )
                 imported += 1
             except Exception as e:

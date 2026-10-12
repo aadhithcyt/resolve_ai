@@ -25,6 +25,7 @@ TABLE OF CONTENTS
 16. API Endpoint Catalog
 17. Database Schema and Entity-Relationship Diagram
 18. Problems and Difficulties Faced During the Build
+19. Windows Compatibility (RHEL to Windows Migration)
 
 ---
 
@@ -44,7 +45,7 @@ ResolveAI is an AI-powered customer support desk that automates support workflow
 - Customer portal (public API for ticket status)
 - Multi-language support (5 languages)
 - Cross-platform: Windows, Linux, macOS, Docker
-- 200 automated tests
+- 214 automated tests
 
 The project demonstrates production-grade software engineering practices including clean architecture, separation of concerns, comprehensive testing, security hardening, and CI/CD automation.
 
@@ -337,7 +338,7 @@ Known Acceptable Risks (portfolio project):
 
 7. TESTING STRATEGY
 
-200 tests across 17 test files:
+214 tests across 17 test files:
 
   conftest.py — Test configuration with temp database, disabled rate limiting, test API key
 
@@ -467,7 +468,7 @@ API Documentation:
 1. Complete Feature Set
    - End-to-end solution from ticket creation to AI resolution
    - Not a demo or prototype — fully functional
-   - 40 source files, 200 tests, comprehensive documentation
+   - 40 source files, 214 tests, comprehensive documentation
 
 2. Modern Architecture
    - Async throughout (FastAPI, aiosqlite, httpx)
@@ -500,7 +501,7 @@ API Documentation:
    - Auto-generated API docs (Swagger/ReDoc)
    - Comprehensive README and deployment guide
    - .env.example for easy configuration
-   - 200 automated tests
+   - 214 automated tests
    - CI/CD with GitHub Actions
    - Clear code organization
 
@@ -627,7 +628,7 @@ Low Priority:
 
 ResolveAI is a comprehensive, production-ready AI-powered customer support platform that demonstrates modern software engineering practices. It successfully combines a FastAPI backend, SQLite database, Groq AI integration, real-time communication (SSE + WebSocket), background workers, and a beautiful color-psychology-driven frontend.
 
-The project includes 40 source files, 200 passing tests, cross-platform support, Docker deployment, CI/CD automation, and comprehensive documentation. The AI agent with streaming tool calling and conversation memory is the standout feature that differentiates it from traditional support desks.
+The project includes 40 source files, 214 passing tests, cross-platform support, Docker deployment, CI/CD automation, and comprehensive documentation. The AI agent with streaming tool calling and conversation memory is the standout feature that differentiates it from traditional support desks.
 
 While there are areas for improvement (database migrations, distributed rate limiting, frontend framework migration), the current implementation is solid, secure, and ready for production deployment at small to medium scale. The codebase is clean, well-tested, and easy to understand.
 
@@ -1170,7 +1171,7 @@ Two limits are applied together:
     Reason: this is what allows the test suite to disable rate limiting by
     setting an environment variable before the app imports, and it allows
     runtime configuration changes without a restart. This detail is the reason
-    the 200 tests can run without hitting limits.
+    the 214 tests can run without hitting limits.
 
   Rejected: Redis-backed rate limiting.
     Reason for rejection: it would add a server dependency, breaking the
@@ -1444,19 +1445,27 @@ CustomerResponse, and the same pattern for tickets.
 
 ---------------------------------------------------------------------------
 
-15.19 TESTING METHOD: 200 TESTS (197 AT BUILD, +3 REGRESSION)
+15.19 TESTING METHOD: 214 TESTS (197 AT BUILD, +17 REGRESSION)
 
-The build produced 197 tests. Three regression tests were added during the final
-readiness audit, after a middleware bug was found that the original 197 did not
-catch (see section 18.14b). The 197 are described below; the 3 additions all
-drive the real ASGI stack to assert HTTP status codes for the rejection paths.
+The build produced 197 tests. Seventeen were added during the final readiness
+and Windows-compatibility audits, bringing the total to 214:
+
+  +3  middleware regression tests, after a bug was found that the original 197
+      did not catch (section 18.14b). They drive the real ASGI stack and assert
+      the HTTP status codes for the rejection paths.
+  +14 Windows-compatibility tests in test_platform.py (section 19.3), including
+      AST scans that fail the build if a POSIX-only import, an unencoded
+      text-mode open(), a deprecated asyncio.get_event_loop(), or a raw
+      datetime.fromisoformat on a stored timestamp reappears.
+
+The original 197 are described below.
 
 The testing decisions and their reasons:
 
   Decision: a fresh temporary database for every test (conftest.py deletes and
   recreates the file around each test).
     Reason: tests must not depend on each other's data or on leftover state.
-    Isolation is what makes 200 tests reliable in any order.
+    Isolation is what makes 214 tests reliable in any order.
 
   Decision: the test database path and the rate-limit values are set as
   environment variables BEFORE the app is imported.
@@ -2358,6 +2367,244 @@ least one test per rejection path that goes through the full stack.
      duplicate CORS entry existed because a hand-written list drifted from
      reality. The API catalog and ER diagram avoid this by being introspected
      from the running app and the live schema.
+
+---------------------------------------------------------------------------
+
+19. WINDOWS COMPATIBILITY (RHEL TO WINDOWS MIGRATION)
+
+The project targets RHEL, Windows, macOS and Docker from one codebase. This
+section documents what makes that true, what was fixed to achieve it, and how
+the claim was verified without a Windows machine available.
+
+19.1 WHAT ACTUALLY BREAKS IN A RHEL TO WINDOWS MOVE
+
+Five classes of breakage matter when moving a Python web app from Linux to
+Windows. Each is addressed in this codebase.
+
+  1. Text file I/O encoding. Windows defaults text-mode file operations to the
+     cp1252 codec, not UTF-8. Any file containing non-ASCII characters raises
+     UnicodeDecodeError on Windows while working perfectly on Linux. The i18n
+     module holds Chinese, German and French strings (138 non-ASCII characters),
+     so this was a live hazard.
+     Status: every text-mode open() now passes an explicit encoding.
+
+  2. POSIX-only imports. Modules such as fcntl, pwd, grp, termios, resource,
+     pty, tty and syslog do not exist on Windows and fail at import.
+     Status: verified absent via an AST scan of every file in app/.
+
+  3. Path separators. Hardcoded forward slashes or os.path.join with manual
+     string building produce broken paths.
+     Status: all paths use pathlib; os.path.join is used nowhere.
+
+  4. Deprecated asyncio.get_event_loop(). Deprecated since Python 3.12 and
+     raises when no loop is running. The email worker used it.
+     Status: replaced with asyncio.get_running_loop().
+
+  5. Naive vs aware datetimes. SQLite's CURRENT_TIMESTAMP and datetime()
+     produce naive strings ("2026-10-12 15:48:29") while the application writes
+     aware ISO strings ("2026-10-12T15:48:29+00:00"). Subtracting one from the
+     other raises TypeError. This was a real, latent bug (see 19.2).
+     Status: a single parse_ts() helper normalises both forms to aware UTC.
+
+Also verified as safe: no shell commands are invoked from Python (no
+subprocess, no os.system), and every dependency is pure-Python or ships
+prebuilt Windows wheels, so no compiler is required on any platform.
+
+19.2 THE DATETIME BUG THAT WINDOWS WOULD HAVE TRIGGERED
+
+While auditing for Windows compatibility, a latent bug was found that affects
+all platforms but would have surfaced most visibly after a Windows migration.
+
+Problem: escalation Rule 3 ("no agent response in 48 hours -> escalate to
+high") was dead code. It never fired, on any platform.
+
+Root cause: the rule parsed the ticket's created_at with
+datetime.fromisoformat() and subtracted it from datetime.now(timezone.utc).
+Rows created by SQLite's CURRENT_TIMESTAMP carry a NAIVE timestamp, so the
+subtraction raised TypeError, and a broad `except (ValueError, TypeError): pass`
+swallowed it silently. The rule then simply returned None as if no rule had
+matched.
+
+Why it mattered more on Windows: Windows is where SQLite's naive
+CURRENT_TIMESTAMP path is most likely to dominate, because the email receiver
+creates tickets through it. On Linux the same code path exists, so the bug was
+already present — the migration would merely have made it more likely to bite.
+
+How it was found: a targeted probe inserted a ticket with a naive
+datetime('now', '-72 hours') timestamp and called check_escalation_rules()
+directly. It returned None where an escalation was expected, and the
+TypeError was reproduced in isolation.
+
+How it was fixed: added config.parse_ts(), which accepts aware ISO strings,
+naive SQLite strings, a trailing Z, datetime objects, and None, always
+returning an aware UTC datetime. Every place that reads a stored timestamp now
+goes through it, and the swallowing try/except was removed because the
+conversion can no longer raise.
+
+Additional related fixes in the same pass:
+
+  - workers.py: _send_sla_breach_notification() had the same naive/aware
+    subtraction. On Windows this would have raised TypeError and killed the
+    whole SLA scanner iteration before the ticket could be marked breached —
+    meaning SLA breach detection would silently stop working.
+  - workers.py: email-created tickets were inserted without sla_due_at and
+    without created_at/updated_at, relying on SQLite's CURRENT_TIMESTAMP. They
+    now write aware UTC timestamps and a real SLA deadline computed from
+    priority, so email tickets behave identically to API tickets.
+  - routers/tickets.py: resolved_at and updated_at were written as
+    CURRENT_TIMESTAMP (naive). They now write aware UTC ISO strings. This
+    matters because the SLA report compares resolved_at <= sla_due_at as
+    STRINGS, and a naive "2026-10-12 15:48:29" does not sort the same way as an
+    aware "2026-10-12T15:48:29+00:00" at the same instant.
+  - escalation.py, tools.py, workers.py: the updated_at writes in the
+    escalation paths were also switched to aware timestamps.
+  - import_export.py: imported tickets were writing the current time into
+    sla_due_at (semantically wrong — that column is a deadline, not a
+    timestamp). They now compute a real SLA deadline from priority.
+
+19.3 THE TEST SUITE WAS TOO WEAK TO PROVE ANY OF THIS
+
+Problem: the original test_platform.py had 12 tests, and they would all have
+passed on a codebase that was broken on Windows. They asserted that pathlib was
+in use, that no hardcoded paths appeared in config, and that static files
+resolved — none of which detects a missing encoding, a POSIX import, a
+deprecated asyncio call, or a naive datetime.
+
+How it was resolved: the module was rewritten with 26 tests, adding static
+AST analysis that fails the build if any of the Windows-breakage classes
+reappear:
+
+  - test_no_posix_only_module_imports: AST scan for fcntl/pwd/termios/etc.
+  - test_text_file_io_declares_encoding: AST scan of every open() call,
+    exempting binary mode, failing on any text-mode open without encoding.
+  - test_no_deprecated_get_event_loop: AST scan for asyncio.get_event_loop.
+  - test_no_os_path_string_concatenation: fails on os.path.join.
+  - test_no_raw_fromisoformat_on_stored_timestamps: fails on any
+    datetime.fromisoformat outside config.py, forcing use of parse_ts.
+  - test_parse_ts_handles_*: four tests covering every input form.
+  - test_timestamps_are_comparable_across_formats: proves a naive SQLite
+    value and an aware app value can be subtracted.
+  - test_escalation_rule_3_fires_for_stale_ticket: the regression test for
+    19.2. It failed before the fix and passes after.
+  - test_email_created_ticket_has_sla_deadline: proves email tickets get a
+    real SLA deadline.
+  - test_windows_scripts_exist_and_are_nonempty, and
+    test_unix_scripts_have_shebang_and_venv_guard.
+  - test_requirements_have_no_platform_specific_pins.
+
+These tests are deliberately strict: they are meant to FAIL if Windows
+compatibility regresses, not merely to pass on Linux. Two of them caught
+additional real problems while being written (the escalation rule and a test
+isolation bug described in 19.4).
+
+19.4 A TEST-ISOLATION BUG THE NEW TESTS EXPOSED
+
+Problem: the original test_env_var_override set os.environ["RESOLVEAI_DB"] = ""
+to "reset" the variable. Setting an environment variable to an empty string is
+NOT the same as unsetting it: os.getenv(key, default) returns "" when the key
+exists but is empty, so the default was never applied. Every test that ran
+after it opened a connection to an empty path, and one test in the same file
+failed with "no such table: customers" — depending on test ordering.
+
+How it was resolved: the test now saves the original value and restores it with
+os.environ.pop() when it was previously unset, in a finally block.
+
+Lesson: restoring environment state in tests requires distinguishing "unset"
+from "set to empty". This is the same class of bug as the import-time config
+capture in section 18.6.
+
+19.5 SCRIPTS: WINDOWS AND LINUX PATHS BOTH NEEDED WORK
+
+  setup.sh was already reasonable but assumed a working venv.
+  run.sh hard-failed with `source .venv/bin/activate` if no venv existed, and
+    knew nothing about the Windows venv layout (.venv/Scripts/activate). It now
+    checks for both layouts, falls back to the system Python with a clear
+    message, and works under Git Bash on Windows.
+  run.bat had no venv check at all: running it before setup produced a cryptic
+    "cannot find the path" failure. It now checks for the venv, prints an
+    actionable message, and exits with a non-zero code.
+  setup.bat had no error checking: a failed pip install was reported as
+    success, and "Setup complete!" printed regardless. It now verifies the
+    Python version is 3.10+, checks the result of venv creation and pip install,
+    and exits non-zero on failure.
+  Both .sh scripts were committed with mode 100644 rather than 100755, so
+    `./setup.sh` failed on a fresh clone despite the README instructing it.
+    Fixed with git update-index --chmod=+x and verified as 100755.
+
+19.6 DEPENDENCY HYGIENE FOR A CROSS-PLATFORM INSTALL
+
+Problem: requirements.txt listed aiofiles and passlib, and neither is imported
+anywhere in the codebase (verified by grep across app/ and tests/). The code
+calls the bcrypt library directly rather than going through passlib.
+
+Why it matters for Windows: every unnecessary dependency is another package
+that must have a wheel available for the target Python version on Windows, and
+another opportunity for the install step to fail on a machine with no compiler.
+aiofiles and passlib were removed.
+
+python-multipart was kept and documented: FastAPI raises at import time if a
+route uses UploadFile and this package is missing. It is a required dependency,
+not an optional one.
+
+requirements.txt is now commented by purpose, and a test asserts that no entry
+contains a platform-specific pin (win32, manylinux, macosx, platform_system).
+
+19.7 HOW WINDOWS COMPATIBILITY WAS VERIFIED WITHOUT WINDOWS
+
+No Windows machine was available, so the verification is static and
+simulation-based rather than a true Windows run. Three layers:
+
+  Layer 1 - Static analysis in the test suite (section 19.3). AST scans of the
+  entire app/ tree assert that each known Windows-breakage class is absent.
+  These run on every test run, so a regression fails the build.
+
+  Layer 2 - Simulated failure modes (a probe script run on Linux). This proved:
+    - the i18n source genuinely fails to decode as cp1252 and succeeds as
+      UTF-8, confirming the hazard is real and the fix is necessary;
+    - the i18n module loads and returns 42 Chinese translation keys;
+    - pathlib handles a Windows-style C:\ path correctly;
+    - no text-mode open() lacks an encoding;
+    - no POSIX-only imports exist;
+    - all dependencies import cleanly;
+    - SQLite's CURRENT_TIMESTAMP is naive on this build and parse_ts converts
+      it to aware UTC;
+    - asyncio.get_running_loop() works.
+
+  Layer 3 - A live end-to-end run of the full application (17 endpoint checks
+  through a real uvicorn server), confirming the fixes did not break anything
+  and that resolved_at is now written as an aware timestamp
+  (2026-10-12T16:04:24.470358+00:00).
+
+19.8 WHAT REMAINS UNVERIFIED
+
+Honesty about the limits of this audit:
+
+  - The application was never executed on an actual Windows host. The evidence
+    is static analysis plus simulation. A true confirmation requires running
+    setup.bat and run.bat on Windows.
+  - The .bat scripts were syntax-reviewed and hardened but not executed. Batch
+    scripting has its own quirks (delayed expansion, quoting) that only a real
+    run exposes.
+  - Windows Defender or corporate policy may flag the SQLite file writes or
+    block the port. The DEPLOYMENT.md firewall command covers the port case.
+  - The uvloop optimisation is skipped on Windows by design (uvicorn[standard]
+    installs it only where supported). This means slightly lower throughput on
+    Windows, which is expected and not a defect.
+  - Copying an existing database across does NOT fix attachments.file_path,
+    which stores absolute Linux paths. DEPLOYMENT.md documents the SQL to
+    rewrite them, or the files can be re-uploaded.
+
+19.9 MIGRATION CHECKLIST (RHEL TO WINDOWS)
+
+  1. Do not copy .venv/ or __pycache__/ — they are OS-specific. Recreate with
+     setup.bat.
+  2. Install Python 3.10+ and tick "Add Python to PATH".
+  3. Run setup.bat, then set GROQ_API_KEY (set for the session, setx to persist).
+  4. Run run.bat, or install as a service with NSSM.
+  5. If copying the database: rewrite attachments.file_path (see DEPLOYMENT.md).
+     Timestamps need no migration — parse_ts handles both formats.
+  6. Verify: curl http://localhost:8000/health and pytest tests/test_platform.py.
+  7. Open the firewall port if the app must be reachable from other machines.
 
 ---------------------------------------------------------------------------
 

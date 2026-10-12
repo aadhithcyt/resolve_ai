@@ -45,13 +45,13 @@ A production-ready customer support platform with AI-powered auto-replies, strea
 - Windows, Linux, macOS support
 - Docker and docker-compose
 - CI/CD with GitHub Actions (Python 3.10–3.13)
-- 200 tests covering all modules
+- 214 tests covering all modules
 
 ## Quick Start
 
 ### Windows
 ```cmd
-git clone https://github.com/YOUR_USERNAME/resolveai.git
+git clone https://github.com/aadhithcyt/resolveai.git
 cd resolveai
 setup.bat
 set GROQ_API_KEY=your-key-here
@@ -60,7 +60,7 @@ run.bat
 
 ### Linux / macOS / RHEL
 ```bash
-git clone https://github.com/YOUR_USERNAME/resolveai.git
+git clone https://github.com/aadhithcyt/resolveai.git
 cd resolveai
 chmod +x setup.sh
 ./setup.sh
@@ -142,7 +142,7 @@ resolveai/
 │   └── templates/            # HTML templates
 ├── public/
 │   └── sw.js                 # Service worker for push notifications
-├── tests/                    # 200 tests
+├── tests/                    # 214 tests
 ├── setup.sh / setup.bat      # Cross-platform setup
 ├── run.sh / run.bat          # Cross-platform run
 ├── Dockerfile
@@ -171,7 +171,7 @@ pip install pytest pytest-asyncio httpx
 pytest tests/ -v
 ```
 
-200 tests covering tickets, customers, AI agent, SLA, auth, KB, attachments, memory, streaming, notifications, presence, chat, and platform compatibility.
+214 tests covering tickets, customers, AI agent, SLA, auth, KB, attachments, memory, streaming, notifications, presence, chat, and platform compatibility.
 
 ## License
 

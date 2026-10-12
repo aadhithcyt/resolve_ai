@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from .database import get_db
-from .config import SLA_TARGETS_HOURS
+from .config import SLA_TARGETS_HOURS, parse_ts
 
 logger = logging.getLogger(__name__)
 
@@ -47,15 +47,15 @@ async def check_escalation_rules(ticket_id: int) -> Optional[dict]:
 
         # Rule 3: No agent response in 48h
         if ticket.get("agent_replies", 0) == 0 and ticket["status"] == "open":
-            created = ticket.get("created_at", "")
-            if created:
-                try:
-                    created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
-                    hours_open = (now - created_dt).total_seconds() / 3600
-                    if hours_open > 48 and ticket["priority"] in ("low", "medium"):
-                        return await _escalate(ticket_id, "high", f"No agent response for {hours_open:.0f} hours")
-                except (ValueError, TypeError):
-                    pass
+            # parse_ts normalises both SQLite's naive "YYYY-MM-DD HH:MM:SS" and
+            # the app's aware ISO strings to UTC, so the subtraction below can
+            # never raise. (It previously did, and the TypeError was swallowed
+            # by the except clause, leaving this rule permanently dead.)
+            created_dt = parse_ts(ticket.get("created_at"))
+            if created_dt is not None:
+                hours_open = (now - created_dt).total_seconds() / 3600
+                if hours_open > 48 and ticket["priority"] in ("low", "medium"):
+                    return await _escalate(ticket_id, "high", f"No agent response for {hours_open:.0f} hours")
 
         # Rule 4: Negative sentiment + high priority
         if ticket.get("sentiment") == "negative" and ticket["priority"] in ("high", "urgent"):
@@ -73,8 +73,8 @@ async def _escalate(ticket_id: int, new_priority: str, reason: str) -> dict:
         sla_due = _compute_sla_due_at(new_priority, now)
 
         await db.execute(
-            "UPDATE tickets SET priority = ?, sla_due_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (new_priority, sla_due.isoformat(), ticket_id),
+            "UPDATE tickets SET priority = ?, sla_due_at = ?, updated_at = ? WHERE id = ?",
+            (new_priority, sla_due.isoformat(), now.isoformat(), ticket_id),
         )
         await db.execute(
             "INSERT INTO messages (ticket_id, sender, content, is_ai_generated) VALUES (?, ?, ?, ?)",
