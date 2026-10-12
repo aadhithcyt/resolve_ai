@@ -215,3 +215,37 @@ async def test_wrong_api_key_returns_403_not_500():
         assert r.status_code == 403, f"expected 403, got {r.status_code}"
     finally:
         auth.API_KEY = original
+
+
+@pytest.mark.asyncio
+async def test_health_responds_to_head():
+    """HEAD /health must return 200, not 405.
+
+    Load balancers, container orchestrators and uptime monitors commonly probe
+    liveness with HEAD. A 405 makes the service look unhealthy to them.
+    """
+    from app.database import init_db
+
+    await init_db()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.head("/health")
+    assert r.status_code == 200, f"HEAD /health returned {r.status_code}, expected 200"
+
+
+@pytest.mark.asyncio
+async def test_health_accessible_without_credentials():
+    """GET /health must never require auth, so monitors can reach it."""
+    from app import auth
+    from app.database import init_db
+
+    await init_db()
+    original = auth.API_KEY
+    auth.API_KEY = "monitor-should-not-need-this"
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.get("/health")
+        assert r.status_code == 200
+    finally:
+        auth.API_KEY = original

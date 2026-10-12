@@ -98,7 +98,14 @@ async def service_worker():
 
 
 @app.get("/health")
+@app.head("/health")
 async def health():
+    """Liveness probe.
+
+    Registered for both GET and HEAD: many load balancers, container
+    orchestrators and uptime monitors probe with HEAD, and a 405 would make the
+    service look unhealthy to them.
+    """
     return {"status": "ok", "service": "ResolveAI"}
 
 
