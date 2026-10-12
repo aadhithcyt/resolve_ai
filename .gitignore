@@ -16,3 +16,7 @@ venv/
 htmlcov/
 *.log
 .DS_Store
+
+# Uploaded files (tests write here; keep only the placeholder)
+uploads/*
+!uploads/.gitkeep

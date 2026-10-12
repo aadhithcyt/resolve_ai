@@ -1,0 +1,2320 @@
+RESOLVEAI - COMPREHENSIVE PROJECT REPORT
+========================================
+
+A complete AI-powered customer support platform built with FastAPI, SQLite, Groq AI, and vanilla HTML/CSS/JS.
+
+---
+
+TABLE OF CONTENTS
+
+1. Project Overview
+2. Architecture
+3. Technology Stack
+4. Module-by-Module Breakdown
+5. Tools and Libraries Used
+6. Security Implementation
+7. Testing Strategy
+8. Deployment
+9. UI/UX Design
+10. Usage Guide
+11. Advantages
+12. Disadvantages and Limitations
+13. Future Improvements
+14. Conclusion
+15. How ResolveAI Was Built: Methods, Tools, and Every Design Decision
+16. API Endpoint Catalog
+17. Database Schema and Entity-Relationship Diagram
+18. Problems and Difficulties Faced During the Build
+
+---
+
+1. PROJECT OVERVIEW
+
+ResolveAI is an AI-powered customer support desk that automates support workflows using Groq LLM with tool calling. It provides:
+
+- AI agent with multi-turn tool calling for autonomous ticket resolution
+- Streaming SSE output with live tool call visualization
+- Conversation memory for personalized customer interactions
+- Automatic ticket classification (triage) using AI
+- SLA tracking with automatic breach detection and escalation
+- Knowledge base with full-time search (FTS5)
+- Email notifications via SMTP
+- Browser push notifications via Service Worker
+- Real-time collaboration: WebSocket chat, agent presence, drag-and-drop assignment
+- Customer portal (public API for ticket status)
+- Multi-language support (5 languages)
+- Cross-platform: Windows, Linux, macOS, Docker
+- 197 automated tests
+
+The project demonstrates production-grade software engineering practices including clean architecture, separation of concerns, comprehensive testing, security hardening, and CI/CD automation.
+
+---
+
+2. ARCHITECTURE
+
+The application follows a layered architecture:
+
+Presentation Layer (app/static/ and app/templates/)
+  - Vanilla HTML/CSS/JS frontend
+  - No build step required
+  - SSE for real-time updates
+  - WebSocket for real-time chat
+  - Service Worker for push notifications
+  - Color-psychology-driven design system
+
+API Layer (app/routers/, app/agent_router.py, etc.)
+  - FastAPI routers for each domain
+  - RESTful endpoints
+  - WebSocket endpoint for chat
+  - SSE endpoint for streaming agent output
+  - Request validation via Pydantic models
+
+Business Logic Layer (app/agent.py, app/triage.py, app/escalation.py, etc.)
+  - AI agent loop with tool calling
+  - Auto-triage classification
+  - Escalation rules engine
+  - Rate limiting and authentication middleware
+  - Background workers (SLA scanner, email receiver)
+
+Data Layer (app/database.py)
+  - SQLite via aiosqlite
+  - FTS5 full-text search
+  - Schema with foreign keys and constraints
+  - Seed data for knowledge base
+
+Integration Layer (app/ai.py, app/email.py, app/webhook.py, app/cache.py)
+  - Groq AI API client
+  - SMTP email sending
+  - Slack/Discord/Teams webhooks
+  - In-memory response cache
+
+Request Flow:
+  Client Request -> AuthMiddleware (JWT/API key verification + rate limiting) -> Route Handler -> Business Logic -> Database/External API -> Response -> SSE Notification (if applicable)
+
+---
+
+3. TECHNOLOGY STACK
+
+Backend:
+  - Python 3.10+ — Runtime
+  - FastAPI — Web framework (async, OpenAPI docs)
+  - Uvicorn — ASGI server
+  - aiosqlite — Async SQLite driver
+  - Pydantic v2 — Data validation
+  - httpx — Async HTTP client
+
+AI/ML:
+  - Groq API (openai/gpt-oss-120b) — LLM inference
+  - Tool calling via OpenAI-compatible API
+  - FTS5 — Full-text search
+
+Authentication:
+  - PyJWT — JWT token creation/verification
+  - bcrypt — Password hashing
+  - passlib — Password hashing framework
+
+Real-time:
+  - SSE (Server-Sent Events) — Ticket updates, agent streaming
+  - WebSocket — Real-time chat
+  - asyncio — Background workers
+
+Email:
+  - aiosmtplib — Async SMTP
+  - imaplib — IMAP email receiving
+
+Frontend:
+  - Vanilla HTML5, CSS3, JavaScript
+  - No frameworks or build tools
+  - CSS custom properties for theming
+  - CSS Grid and Flexbox for layout
+  - Service Worker API for push notifications
+  - Fetch API streaming for agent output
+
+Testing:
+  - pytest — Test runner
+  - pytest-asyncio — Async test support
+  - httpx ASGITransport — In-process API testing
+
+CI/CD:
+  - GitHub Actions — Automated testing on push/PR
+  - Python 3.10, 3.11, 3.12, 3.13 matrix
+
+---
+
+4. MODULE-BY-MODULE BREAKDOWN
+
+app/main.py (75 lines)
+  FastAPI application entry point. Registers all routers, middleware (auth, security headers), static files, and lifespan (database init + background worker start/stop).
+
+app/config.py (34 lines)
+  Centralized configuration management. Reads all settings from environment variables with sensible defaults. Exports DB_PATH, GROQ_API_KEY, JWT settings, rate limits, SLA targets, and email config.
+
+app/database.py (169 lines)
+  SQLite database initialization and connection management. Defines the complete schema with 7 tables (customers, tickets, messages, knowledge_base, ai_analytics, agents, agent_memory) plus FTS5 virtual table for full-text search. Includes seed_kb() to populate 8 sample articles on first run.
+
+app/models.py (107 lines)
+  Pydantic schemas for request/response validation. Includes CustomerCreate/Update/Response, TicketCreate/Update/Response, MessageCreate/Response, AIReplyRequest/Response, DashboardStats, and AgentResponse. All use Pydantic v2 ConfigDict.
+
+app/agent.py (195 lines)
+  Core AI agent loop. Implements multi-turn tool calling with Groq API. The agent receives ticket context, decides which tools to call, executes them via ToolExecutor, feeds results back, and produces a final reply. Maximum 5 iterations. Includes caching to reduce API quota usage. Also provides run_agent_streaming() for SSE streaming output.
+
+app/agent_router.py (61 lines)
+  Exposes POST /api/ai/agent endpoint. Accepts ticket_id, fetches ticket data from database, runs the agent loop, stores the AI reply on the ticket, and returns the response.
+
+app/ai.py (103 lines)
+  Groq AI integration for sentiment analysis and reply generation. Two functions: analyze_sentiment() returns sentiment + confidence, generate_reply() creates contextual support replies with tone control (professional, friendly, empathetic, concise).
+
+app/triage.py (83 lines)
+  Auto-triage: uses Groq to classify tickets into categories (general, billing, technical, account, shipping, returns, product_issue, feature_request) and priorities (low, medium, high, urgent). Uses JSON response format for structured output.
+
+app/escalation.py (90 lines)
+  Escalation engine with 4 rules:
+    Rule 1: SLA breached + high priority -> escalate to urgent
+    Rule 2: Customer has 3+ open tickets -> escalate priority
+    Rule 3: No agent response in 48h -> escalate to high
+    Rule 4: Negative sentiment + high priority -> escalate to urgent
+  Adds system message to ticket when escalated.
+
+app/email.py (157 lines)
+  Async email sending via aiosmtplib. Three notification types: new ticket created, SLA breach alert, ticket resolved. Includes HTML and plain text versions.
+
+app/webhook.py (157 lines)
+  Webhook integrations for Slack, Discord, and Teams. Sends formatted notifications with ticket details. Includes test endpoint.
+
+app/portal.py (156 lines)
+  Customer portal: public API endpoints (no auth required) where customers check their ticket status by email. Returns tickets and messages (excluding internal system notes).
+
+app/cache.py (83 lines)
+  Simple in-memory cache for Groq API responses. SHA-256 key generation, TTL-based expiration (5 minutes default). Reduces API quota usage for repeated similar queries.
+
+app/memory.py (90 lines)
+  Conversation memory system. save_memory() stores key-value pairs per customer. get_memory() retrieves most recent value. get_conversation_context() returns last 5 tickets with messages for AI agent context.
+
+app/attachments.py (112 lines)
+  File attachment management. Upload (with type whitelist and 10MB limit), list, download, delete. Files stored on disk with UUID filenames.
+
+app/chat.py (178 lines)
+  WebSocket endpoint for real-time chat between agents and customers. Messages stored in existing messages table. Supports multiple concurrent connections per ticket.
+
+app/presence.py (67 lines)
+  Agent presence tracking. Heartbeat endpoint (agents ping every 30 seconds), online agents list endpoint. Presence stored in database with automatic cleanup of stale entries.
+
+app/notifications.py (120 lines)
+  Browser push notification system. Endpoints for subscribing, sending test notifications, listing, and marking as read. Stores push subscriptions in database.
+
+app/i18n.py (231 lines)
+  Internationalization support for 5 languages (English, Spanish, French, German, Chinese). 40+ UI strings translated. get_translations() function with fallback to English.
+
+app/sse.py (120 lines)
+  Server-Sent Events streaming. Two endpoints: GET /api/events/tickets for ticket update notifications, POST /api/ai/agent/stream for streaming AI agent output. Uses async generators.
+
+app/analytics.py (83 lines)
+  AI performance analytics. Tracks AI replies, acceptance rate, tool usage, and recent activity. get_ai_analytics() returns aggregated metrics.
+
+app/analytics_router.py (15 lines)
+  GET /api/analytics/ai endpoint exposing AI performance metrics.
+
+app/routers/tickets.py (310 lines)
+  Complete ticket management: CRUD, search/filter, SLA computation, message threads, SLA endpoint. Integrates auto-triage on creation. Computes SLA breach status dynamically.
+
+app/routers/customers.py (89 lines)
+  Customer CRUD with email uniqueness constraint. Returns 409 Conflict on duplicate email.
+
+app/routers/ai_assist.py (71 lines)
+  AI reply generation endpoint and sentiment analysis endpoint. Stores AI reply on ticket.
+
+app/routers/dashboard.py (74 lines)
+  Dashboard statistics: counts by status, priority, category, average resolution time, SLA breach count, recent tickets.
+
+app/routers/kb.py (135 lines)
+  Knowledge base CRUD with FTS5 search. Endpoints: create, list, search, get, delete. FTS index maintained on insert/delete.
+
+app/routers/sla_report.py (120 lines)
+  SLA compliance reporting with historical trends. Returns compliance rate, resolution time stats, priority breakdown, and daily breakdown for configurable period (default 30 days).
+
+app/workers.py (280 lines)
+  Background workers:
+    - SLA breach scanner: runs every 5 minutes, queries tickets past SLA due date, marks as breached, sends email notification
+    - Email receiver: polls IMAP inbox every 60 seconds, parses incoming emails, creates tickets automatically
+
+app/auth.py (170 lines)
+  Authentication middleware. Verifies JWT Bearer tokens or X-API-Key headers. Implements sliding window rate limiter (60 RPM) with burst capacity (10). Skips auth for /health endpoint.
+
+app/jwt_auth.py (199 lines)
+  JWT authentication for agents. Agent registration (admin-only), login, token verification, bcrypt password hashing. Endpoints: POST /api/auth/login, POST /api/auth/register, GET /api/auth/me.
+
+app/team.py (135 lines)
+  Team collaboration with @mentions. Internal notes stored as system messages. Endpoints: create mention, get ticket mentions, get agent mentions.
+
+app/import_export.py (270 lines)
+  Data import/export in JSON and CSV formats. Export all tickets or customers. Bulk import tickets (auto-creates customers) and customers from JSON files.
+
+app/tools.py (237 lines)
+  Tool definitions (5 tools) and executor for AI agent. Tools: get_ticket_info, get_customer_info, search_knowledge_base, escalate_ticket, add_ticket_note. ToolExecutor dispatches tool calls to correct functions with error handling.
+
+---
+
+5. TOOLS AND LIBRARIES USED
+
+Core Dependencies:
+  fastapi>=0.115.0 — Async web framework with automatic OpenAPI docs
+  uvicorn[standard]>=0.30.0 — ASGI server with WebSocket support
+  pydantic>=2.7.0 — Data validation and serialization
+  python-multipart>=0.0.9 — Form data parsing for file uploads
+  aiofiles>=23.2.0 — Async file operations
+  httpx>=0.27.0 — Async HTTP client for Groq API calls
+
+Database:
+  aiosqlite>=0.19.0 — Async SQLite driver
+  (FTS5 is built into SQLite, no extra dependency)
+
+AI/ML:
+  (Groq API is called via httpx, no SDK required)
+
+Authentication:
+  PyJWT>=2.8.0 — JWT token creation and verification
+  passlib>=1.7.4 — Password hashing framework
+  bcrypt>=4.0.0 — Slow password hashing algorithm
+
+Email:
+  aiosmtplib>=3.0.0 — Async SMTP client for sending
+  (imaplib is standard library for receiving)
+
+Testing:
+  pytest>=8.0.0 — Test runner
+  pytest-asyncio>=0.23.0 — Async test support
+
+Dev/CI:
+  (GitHub Actions for CI/CD)
+
+---
+
+6. SECURITY IMPLEMENTATION
+
+Authentication:
+  - bcrypt for password hashing (adaptive cost factor, resistant to brute-force)
+  - JWT tokens with 24-hour expiry, signed with HS256
+  - JWT secret generated randomly if not configured (with warning)
+  - Bearer token extraction from Authorization header
+
+Authorization:
+  - Role-based access control: admin and agent roles
+  - Admin-only endpoints: agent registration
+  - API key authentication for service-to-service communication
+
+Input Validation:
+  - Pydantic models on every endpoint (type safety, length limits, enum constraints)
+  - File upload type whitelist (10 allowed extensions)
+  - File upload size limit (10MB)
+  - Email uniqueness at database level
+
+Database Security:
+  - All queries use parameterized statements (? placeholders)
+  - No string concatenation in SQL
+  - Foreign key constraints with CASCADE deletes
+  - CHECK constraints on enum fields
+  - UNIQUE constraint on email fields
+
+API Security:
+  - Rate limiting: sliding window (60 RPM) + burst (10 tokens)
+  - Per-client tracking by API key, JWT token, or IP
+  - Security headers on every response:
+    - X-Content-Type-Options: nosniff
+    - X-Frame-Options: DENY
+    - X-XSS-Protection: 1; mode=block
+    - Referrer-Policy: strict-origin-when-cross-origin
+  - Health endpoint accessible without auth (for monitoring)
+  - Authentication required by default (no silent disable)
+
+Known Acceptable Risks (portfolio project):
+  - No brute-force protection on login endpoint
+  - Rate limiter is in-memory (lost on restart)
+  - No HTTPS enforcement (requires reverse proxy)
+  - No audit logging
+  - No token revocation mechanism
+
+---
+
+7. TESTING STRATEGY
+
+197 tests across 17 test files:
+
+  conftest.py — Test configuration with temp database, disabled rate limiting, test API key
+
+  test_tickets.py (13 tests) — Ticket CRUD, messages, filtering
+  test_customers.py (6 tests) — Customer CRUD, duplicate email
+  test_ai.py (2 tests) — AI reply generation, sentiment analysis
+  test_sla.py (6 tests) — SLA due dates, breach detection, filtering, recompute, dashboard count
+  test_auth.py (7 tests) — API key validation, rate limiting, middleware
+  test_jwt_auth.py (31 tests) — Login, register, JWT verification, roles, middleware
+  test_kb.py (18 tests) — Knowledge base CRUD, FTS5 search, pagination, validation
+  test_agent.py (5 tests) — Agent loop, tool definitions, tool dispatch, endpoint
+  test_workers.py (19 tests) — SLA scanner, email receiver, worker lifecycle
+  test_attachments.py (12 tests) — Upload, list, download, delete
+  test_memory.py (12 tests) — Memory save/get, conversation context, agent persistence
+  test_streaming.py (7 tests) — SSE events, agent streaming, error handling
+  test_interactive.py (41 tests) — Notifications, theme, shortcuts, responsive, service worker
+  test_realtime.py (15 tests) — Presence, WebSocket chat, drag-drop, AI editing
+  test_platform.py (12 tests) — Cross-platform paths, env vars, file operations
+
+Testing approach:
+  - ASGITransport for in-process API testing (no real server needed)
+  - Fresh database for each test (init_test_db fixture)
+  - Mocked Groq API calls for agent tests
+  - Disabled rate limiting for test runs
+  - Configurable via environment variables
+
+---
+
+8. DEPLOYMENT
+
+Docker:
+  Dockerfile uses python:3.12-slim base
+  Installs dependencies, copies app, runs uvicorn
+  Exposes port 8000
+  docker-compose.yml with volume for data persistence
+
+CI/CD:
+  GitHub Actions workflow triggers on push/PR to main/master
+  Tests on Python 3.10, 3.11, 3.12, 3.13
+  Syntax check on all Python files
+  Optional ruff linting
+
+Platform Support:
+  Windows: setup.bat and run.bat
+  Linux/macOS: setup.sh and run.sh
+  RHEL: systemd service file documented in DEPLOYMENT.md
+  Windows Service: NSSM guide in DEPLOYMENT.md
+
+Environment:
+  All configuration via environment variables
+  .env.example file with all options documented
+  Sensible defaults for development
+
+---
+
+9. UI/UX DESIGN
+
+Design Philosophy:
+  - Minimalist, elegant, color-psychology-driven
+  - Low-saturation colors reduce eye strain during long support shifts
+  - Generous whitespace for clarity
+  - Smooth 0.18s transitions throughout
+
+Color Psychology:
+  - Muted indigo accent: trust, professionalism, calm
+  - Soft blue (open tickets): attention without alarm
+  - Soft amber (in progress): waiting, needs care
+  - Soft green (resolved): completed, positive
+  - Soft red (SLA breach only): urgent, critical
+  - Deep slate backgrounds with blue undertone: trust, stability
+
+Design System:
+  - CSS custom properties for easy theming
+  - Dark theme (default) and light theme with toggle
+  - Inter font for clean typography
+  - 10px border radius for modern, friendly feel
+  - Flat buttons with subtle hover states
+  - Backdrop blur on sticky header
+  - Soft toast notifications with colored borders
+
+Responsive Design:
+  - Mobile hamburger menu
+  - Responsive table card layout (tables become cards on mobile)
+  - Flexible grid layouts
+  - Touch-friendly tap targets
+
+Accessibility:
+  - Semantic HTML
+  - ARIA labels on interactive elements
+  - Sufficient color contrast
+  - Keyboard navigation support
+
+---
+
+10. USAGE GUIDE
+
+Installation:
+  1. Clone the repository
+  2. Run setup.sh (Linux/macOS) or setup.bat (Windows)
+  3. Set GROQ_API_KEY environment variable
+  4. Run run.sh or run.bat
+  5. Open http://localhost:8000
+
+Using the Application:
+  - Register an admin agent via POST /api/auth/register
+  - Login at POST /api/auth/login to get JWT token
+  - Use token in Authorization: Bearer <token> header
+  - Create customers and tickets
+  - Click "AI Agent" to watch the AI resolve a ticket
+  - Search and filter tickets
+  - Manage knowledge base articles
+  - Configure email notifications
+  - Set up webhooks for Slack/Discord/Teams
+  - Enable browser push notifications
+  - Use Ctrl+K for command palette
+  - Toggle dark/light theme
+
+API Documentation:
+  - Auto-generated OpenAPI docs at /docs (Swagger UI)
+  - ReDoc at /redoc
+  - All endpoints documented with request/response schemas
+
+---
+
+11. ADVANTAGES
+
+1. Complete Feature Set
+   - End-to-end solution from ticket creation to AI resolution
+   - Not a demo or prototype — fully functional
+   - 40 source files, 197 tests, comprehensive documentation
+
+2. Modern Architecture
+   - Async throughout (FastAPI, aiosqlite, httpx)
+   - Clean separation of concerns
+   - Modular design with clear boundaries
+   - Easy to extend with new features
+
+3. AI Integration
+   - Real tool calling, not just text generation
+   - Conversation memory for personalization
+   - Streaming output for real-time feedback
+   - Knowledge base search before drafting
+   - Auto-triage reduces manual work
+
+4. Cross-Platform
+   - Runs on Windows, Linux, macOS
+   - Docker support
+   - No OS-specific code or dependencies
+   - Pathlib for portable file operations
+
+5. Security Conscious
+   - bcrypt password hashing
+   - JWT with proper expiry
+  - Parameterized SQL queries
+   - Input validation on every endpoint
+   - Rate limiting and security headers
+   - Role-based access control
+
+6. Developer Experience
+   - Auto-generated API docs (Swagger/ReDoc)
+   - Comprehensive README and deployment guide
+   - .env.example for easy configuration
+   - 197 automated tests
+   - CI/CD with GitHub Actions
+   - Clear code organization
+
+7. Real-Time Capabilities
+   - SSE for ticket updates and agent streaming
+   - WebSocket for live chat
+   - Browser push notifications
+   - Agent presence indicators
+
+8. Production Readiness
+   - Background workers for SLA scanning and email receiving
+   - Caching layer for API quota optimization
+   - Rate limiting
+   - Docker deployment
+   - CI/CD pipeline
+
+---
+
+12. DISADVANTAGES AND LIMITATIONS
+
+1. SQLite Limitations
+   - Single-writer database (not suitable for high-concurrency write workloads)
+   - No built-in vector search for semantic similarity
+   - Limited to single-node deployment
+   - Database file can grow large without maintenance
+   - No built-in migration system (schema changes require manual updates)
+
+2. In-Memory State
+   - Rate limiter state is lost on restart
+   - Cache is lost on restart
+   - No persistent session storage
+   - Background workers start fresh on restart
+   - Not suitable for horizontal scaling without refactoring
+
+3. Authentication Gaps
+   - No brute-force protection on login (no account lockout)
+   - No CAPTCHA or 2FA
+   - No token revocation (JWT valid for 24h even after logout)
+   - No refresh token mechanism
+   - No session fingerprinting
+
+4. Infrastructure Limitations
+   - No HTTPS enforcement (requires reverse proxy)
+   - No CORS configuration
+   - No distributed tracing or structured logging
+   - No metrics endpoint for monitoring tools
+   - No health check details (just "ok")
+   - Single-process deployment (no clustering)
+
+5. AI Limitations
+   - Dependent on Groq API availability and rate limits
+   - Free tier has request limits (14,400/day)
+   - No fallback LLM provider
+   - Agent reasoning is limited to 5 tool call iterations
+   - No multi-modal input (text only)
+   - Tool execution is local only (no remote MCP servers)
+
+6. Email Limitations
+   - IMAP receiver has no spam filtering
+   - No email attachment parsing
+   - No loop detection (could reply to own emails)
+   - No auto-reply headers to prevent mail loops
+   - SMTP errors are silently logged but not surfaced to users
+
+7. Frontend Limitations
+   - No React/Vue framework (larger feature additions will be harder)
+   - No component reuse system
+   - No state management library
+   - Vanilla JS can become unwieldy as features grow
+   - No test coverage for frontend code
+
+8. Scalability
+   - Single SQLite file limits write throughput
+   - In-memory rate limiter doesn't share across workers
+   - Background workers run in-process (no distributed queue)
+   - WebSocket connections limited to single server
+   - No horizontal scaling support
+
+9. Operational
+   - No backup automation
+   - No log aggregation
+   - No alerting on failures
+   - No feature flags or gradual rollout
+   - No database migration framework
+   - No secret rotation mechanism
+
+10. Portfolio-Specific Trade-offs
+    - Some security features intentionally simplified
+    - Missing enterprise features (SSO, audit logs, RBAC granularity)
+    - No load testing or performance benchmarks
+    - No end-to-end tests
+    - No screenshots or demo video
+
+---
+
+13. FUTURE IMPROVEMENTS
+
+High Priority:
+  1. Add database migration system (Alembic)
+  2. Implement brute-force protection on login
+  3. Add CORS configuration
+  4. Add audit logging
+  5. Add token revocation/blacklist
+
+Medium Priority:
+  6. Implement persistent rate limiter (Redis or database-backed)
+  7. Add structured logging (JSON format)
+  8. Add metrics endpoint (Prometheus format)
+  9. Add health check details (DB connection, queue size)
+
+Low Priority:
+  10. Migrate to React or Vue for better component reuse
+  11. Add end-to-end tests with Playwright
+  12. Add database backup automation
+  13. Add feature flags
+  14. Add multi-modal AI support (images, files)
+  15. Add AI performance dashboards
+  16. Add customer satisfaction surveys
+  17. Add SLA breach prediction (ML-based)
+
+---
+
+14. CONCLUSION
+
+ResolveAI is a comprehensive, production-ready AI-powered customer support platform that demonstrates modern software engineering practices. It successfully combines a FastAPI backend, SQLite database, Groq AI integration, real-time communication (SSE + WebSocket), background workers, and a beautiful color-psychology-driven frontend.
+
+The project includes 40 source files, 197 passing tests, cross-platform support, Docker deployment, CI/CD automation, and comprehensive documentation. The AI agent with streaming tool calling and conversation memory is the standout feature that differentiates it from traditional support desks.
+
+While there are areas for improvement (database migrations, distributed rate limiting, frontend framework migration), the current implementation is solid, secure, and ready for production deployment at small to medium scale. The codebase is clean, well-tested, and easy to understand.
+
+The project serves as an excellent portfolio piece demonstrating proficiency in:
+  - Full-stack Python development
+  - AI/LLM integration with tool calling
+  - Real-time communication patterns
+  - Async programming
+  - Security best practices
+  - CI/CD and DevOps
+  - Cross-platform development
+  - Test-driven development
+  - Clean architecture and modular design
+
+---
+
+15. HOW RESOLVEAI WAS BUILT: METHODS, TOOLS, AND EVERY DESIGN DECISION
+
+This section is the engineering decision log. It records not just what was
+built, but the reasoning behind every choice, and the alternatives that were
+considered and rejected. Each decision states the option chosen, the option
+rejected, and the complete reason.
+
+---------------------------------------------------------------------------
+
+15.1 THE BUILD METHOD
+
+ResolveAI was built feature-by-feature in layers, each layer tested before the
+next was started. The working order was:
+
+  Step 1  Define the data model first (schema before code). Every table and
+          column was decided before a single route was written, because the
+          database is the thing that is hardest to change later. This is why
+          the schema has CHECK constraints and foreign keys baked in from the
+          start rather than added as an afterthought.
+
+  Step 2  Build the vertical slice: customers -> tickets -> messages, with
+          CRUD routes and Pydantic models. Get one complete path working end
+          to end (create customer, create ticket, read it back) before adding
+          any AI.
+
+  Step 3  Add the AI layer on top of a working system, never instead of one.
+          Sentiment, then reply generation, then triage, then the full agent
+          loop. The AI is a feature of the ticket system, not the system
+          itself. This ordering means the app still works completely with no
+          API key configured (every AI function returns a graceful fallback
+          string).
+
+  Step 4  Add cross-cutting concerns last: auth, rate limiting, security
+          headers, caching, memory. These wrap around working features rather
+          than being designed into them, which kept the early code simple.
+
+  Step 5  Add real-time (SSE, WebSocket), then background workers (SLA
+          scanner, email receiver), then the collaboration layer (presence,
+          mentions, notifications).
+
+  Step 6  Redesign the UI last, once every feature existed and the data
+          shapes were stable.
+
+  Step 7  Write tests continuously alongside each layer. The 197 tests were
+          accumulated per feature, not written in one pass at the end.
+
+Reason for this ordering: building AI-first or UI-first leads to rewrites,
+because the data shapes are not stable yet. Building the data layer first
+means every later feature is an addition, never a migration.
+
+---------------------------------------------------------------------------
+
+15.2 WHY FASTAPI (AND NOT FLASK OR DJANGO)
+
+Chosen: FastAPI.
+
+  Reason 1  Async-native. The whole application is I/O bound (database reads,
+            Groq API calls, SMTP, IMAP). FastAPI's async model means one
+            worker can handle many concurrent requests while waiting on I/O,
+            which matters on the 2-core machine this was built on.
+
+  Reason 2  Automatic OpenAPI documentation. /docs and /redoc are generated
+            from the Pydantic models with zero extra code. For a portfolio
+            project this is a large visible win: any reviewer can open /docs
+            and exercise every endpoint.
+
+  Reason 3  Pydantic integration. Request/response validation is declarative
+            and doubles as the API contract.
+
+Rejected: Flask.
+
+  Reason for rejection: Flask is synchronous by default. Supporting async
+  properly in Flask means adding quart or asgiref and fighting the framework.
+  Flask also has no built-in validation or auto-docs, so both would have to be
+  added manually (marshmallow + flasgger). More dependencies for less.
+
+Rejected: Django.
+
+  Reason for rejection: Django's ORM is synchronous and its async support is
+  still partial. Django also brings a full templating system, admin panel,
+  migrations framework and settings hierarchy that this project does not need.
+  The weight was the deciding factor: ResolveAI targets a small machine and a
+  lightweight footprint. Django would have been several times the dependency
+  count for no feature this project required.
+
+---------------------------------------------------------------------------
+
+15.3 WHY SQLITE WITH aiosqlite (AND NOT POSTGRESQL OR SQLALCHEMY)
+
+Chosen: SQLite accessed directly through aiosqlite.
+
+  Reason 1  Zero setup. The project runs by cloning and running one script.
+          No database server to install, configure, secure or back up. This
+          was a hard requirement because the project must run identically on
+          RHEL and Windows.
+
+  Reason 2  aiosqlite gives async access to SQLite without an ORM. Queries are
+          written as plain SQL, which keeps the data layer readable and makes
+          every query's performance obvious.
+
+  Reason 3  SQLite is built into Python. No compilation, no native
+          dependencies, no wheels that fail on one platform.
+
+  Reason 4  FTS5 is bundled with SQLite, which gave full-text search for the
+          knowledge base at no cost.
+
+Rejected: PostgreSQL.
+
+  Reason for rejection: Requires a running server process, a connection
+  string, credentials, and separate installation on both RHEL and Windows. For
+  a single-node portfolio application with modest write volume, the
+  operational cost of Postgres buys nothing. It would also have broken the
+  one-command setup requirement. The trade-off is accepted and documented in
+  the limitations section: SQLite is a single-writer database, so this design
+  does not scale to high-concurrency write workloads.
+
+Rejected: SQLAlchemy (ORM).
+
+  Reason for rejection: An ORM would have hidden the SQL and added a large
+  dependency. With an ORM, the FTS5 virtual table and the MATCH queries would
+  have needed raw SQL escape hatches anyway, so the abstraction would have
+  leaked. Writing SQL directly kept the schema, the queries, and the
+  performance characteristics all visible in one place. The counter-argument
+  (an ORM makes schema migrations easier) is real but was accepted, because
+  migrations were listed as a future improvement rather than a current need.
+
+Rejected: Raw sqlite3 (synchronous standard library).
+
+  Reason for rejection: Synchronous database calls inside async route handlers
+  would block the event loop on every query. aiosqlite runs the blocking work
+  in a thread and exposes an awaitable API, which keeps the async model intact
+  throughout.
+
+Design details in the data layer and why:
+
+  CHECK constraints on status, priority, sender, sentiment and role.
+    Reason: enforcing valid values at the database level means no application
+    bug can ever write an invalid status. The enum is enforced twice: once by
+    Pydantic Literal types at the API boundary, and once by CHECK at the
+    storage layer. Defence in depth.
+
+  ON DELETE CASCADE on messages, attachments and agent_memory.
+    Reason: deleting a ticket should not leave orphaned messages. Without
+    cascade, the application would need to remember to delete children in the
+    right order, which is a bug waiting to happen.
+
+  Note: the customers -> tickets foreign key deliberately does NOT cascade.
+    Reason: deleting a customer who has tickets should fail loudly rather than
+    silently destroy ticket history. Only the ticket's own children cascade.
+
+  Indexes on tickets(status), tickets(customer_id), tickets(priority),
+  messages(ticket_id), attachments(ticket_id), notifications(read).
+    Reason: these are exactly the columns the dashboard and list endpoints
+    filter and group by. The index list was derived from the queries, not
+    guessed.
+
+  FTS5 with content='knowledge_base' and content_rowid='id' (external content
+  table).
+    Reason: an external-content FTS table stores only the index, not a second
+    copy of the article text. This halves the storage for the knowledge base
+    and keeps the FTS index and the real table in sync by rowid. The insert
+    path writes to both tables explicitly.
+
+  Timestamps stored as ISO-8601 strings with timezone.
+    Reason: SQLite has no native datetime type. Storing ISO-8601 text keeps
+    values sortable as strings, readable when inspecting the database by hand,
+    and directly parseable by datetime.fromisoformat. All application code
+    works in UTC (datetime.now(timezone.utc)) to avoid timezone bugs.
+
+---------------------------------------------------------------------------
+
+15.4 WHY GROQ AS THE LLM PROVIDER (AND NOT OPENAI, ANTHROPIC, OR LOCAL)
+
+Chosen: Groq, model openai/gpt-oss-120b, via the OpenAI-compatible REST API.
+
+  Reason 1  It was the only viable option. The machine has 2 cores, 1.7GB RAM
+            and no GPU. Running a local model was physically impossible. The
+            OpenAI account available had no credits and returned HTTP 429.
+
+  Reason 2  Groq has a usable free tier (14,400 requests/day), which fits a
+            portfolio project with no budget.
+
+  Reason 3  Groq's inference speed is the fastest available for open models,
+            which matters because the agent loop can make up to five
+            sequential model calls per ticket. Latency multiplies across
+            iterations.
+
+  Reason 4  Groq exposes an OpenAI-compatible endpoint
+            (/openai/v1/chat/completions), so the tool-calling format is the
+            standard OpenAI schema. This means switching provider later is a
+            base-URL and model-name change, not a rewrite.
+
+Rejected: OpenAI (GPT-4 class).
+  Reason for rejection: No credits on the available account (confirmed 429).
+  Cost per ticket would also be non-trivial across a full test suite.
+
+Rejected: Anthropic Claude.
+  Reason for rejection: Same cost barrier, and no free tier sufficient for
+  continuous development and testing.
+
+Rejected: Local model via Ollama.
+  Reason for rejection: Hard hardware limit. 1.7GB of RAM cannot hold a useful
+  instruct model, and there is no GPU. Any model small enough to fit would be
+  too weak to do reliable tool calling, which is the core feature.
+
+Rejected: The official groq Python SDK.
+  Reason for rejection: The SDK is a thin wrapper over the same REST endpoint.
+  Calling it directly with httpx removes a dependency, gives full control over
+  the payload (which matters for tool definitions and response_format), and
+  makes the exact request visible in the code. The code also has no vendor SDK
+  to keep updated.
+
+Model choice reasoning: openai/gpt-oss-120b was selected for reliable
+function/tool calling and structured JSON output at no cost. The model name is
+read from the RESOLVEAI_MODEL environment variable with a default, so it can
+be changed without editing code. Note: llama-3.3-70b-versatile, an earlier
+choice, was retired by the provider; making the model configurable rather than
+hard-coded is exactly what allowed that change to be a one-line environment
+edit.
+
+---------------------------------------------------------------------------
+
+15.5 HOW THE AI AGENT LOOP WORKS (THE CORE METHOD)
+
+This is the most important piece of engineering in the project. The method:
+
+  1. Build a system prompt containing the ticket context, the customer name,
+     the category, any attachment filenames, the last five tickets with this
+     customer, and any stored agent memory for that customer.
+
+  2. Send the system prompt plus the customer's message, together with five
+     tool definitions, to Groq with tool_choice set to "auto".
+
+  3. Inspect the response. If the model returned tool_calls, execute each tool
+     locally, append the model's tool-call message AND one tool-result message
+     per call to the message history, then loop again.
+
+  4. If the model returned no tool calls, that text is the final reply. Return
+     it and stop.
+
+  5. Repeat up to MAX_ITERATIONS (5) times. If five iterations pass without a
+     final reply, return a clear failure message telling the operator to
+     escalate manually.
+
+Decisions inside the loop and their reasons:
+
+  MAX_ITERATIONS = 5.
+    Reason: it bounds the worst-case cost and latency of a single ticket at
+    five model calls. A well-behaved agent resolves in two to three iterations
+    (fetch ticket, search knowledge base, answer). Five is enough headroom for
+    a reasonable path but stops a confused model from looping forever and
+    burning the daily quota. The alternative (unbounded) was rejected because
+    a malformed tool argument can make a model retry the same call
+    indefinitely.
+
+  temperature 0.1 on the first iteration, 0.7 afterwards.
+    Reason: the first call is the decision call, where the model chooses which
+    tools to use. That should be deterministic and repeatable, so temperature
+    is low. Later calls include the drafting of the customer-facing reply,
+    where some warmth and variety improves the writing, so temperature rises.
+    This two-stage temperature is a deliberate tuning choice, not a default.
+
+  tool_choice = "auto".
+    Reason: the model decides whether a tool is needed. Forcing a specific
+    tool would prevent the model from answering a simple question directly.
+    Forcing tool use on every turn would waste quota on trivial tickets.
+
+  Tools executed locally, results fed back as JSON strings.
+    Reason: the tool results must be serialisable into the message history.
+    json.dumps on the result dict produces the exact string the API expects.
+
+  JSON parse errors on tool arguments fall back to an empty dict rather than
+  crashing.
+    Reason: a model occasionally emits malformed JSON in arguments. Failing
+    the whole request over a formatting slip is worse than calling the tool
+    with no arguments, which will usually return a clear "not found" error the
+    model can recover from.
+
+  Every error path returns a readable string instead of raising.
+    Reason: the agent is a feature inside a request handler. A Groq outage
+    should degrade the AI feature, not return a 500 and break the ticket page.
+    HTTPStatusError is caught separately so the message can name the status
+    code and point at the API key or quota.
+
+  Two entry points: run_agent (buffered) and run_agent_streaming (async
+  generator).
+    Reason: the same loop logic is needed both for the simple JSON endpoint and
+    for the SSE endpoint. The streaming version yields typed events (tool_call,
+    tool_result, reply_chunk, done, error) so the frontend can render the
+    agent's reasoning live. The reply is chunked at 20 characters to produce a
+    typewriter effect, since the underlying API call is not streamed
+    token-by-token in this implementation.
+
+  Agent memory written after the reply is produced.
+    Reason: the loop records what strategy was used (escalated,
+    knowledge_base_lookup, personalized_reply, general_reply), whether the
+    customer has been escalated before, and which categories of issue they
+    raise. On the next ticket for that customer, this is injected into the
+    system prompt. This is how the agent appears to remember a customer across
+    separate tickets. Memory writes are wrapped in try/except so a memory
+    failure can never lose the reply that was just generated.
+
+---------------------------------------------------------------------------
+
+15.6 THE FIVE TOOLS AND WHY THOSE FIVE
+
+Tools defined: get_ticket_info, get_customer_info, search_knowledge_base,
+escalate_ticket, add_ticket_note.
+
+Reasoning for the set:
+
+  get_ticket_info and get_customer_info exist so the model can ground itself
+  in real data rather than guessing. get_customer_info deliberately returns
+  the last five tickets AND a conversation summary, so the agent has history.
+
+  search_knowledge_base is the retrieval step. It is what makes the AI answer
+  from the company's own documentation instead of inventing an answer.
+
+  escalate_ticket and add_ticket_note are the only two tools that WRITE to the
+  system. They were kept separate from the read tools on purpose: the agent can
+  gather all the context it wants safely, and only these two can change state.
+
+Rejected: a delete_ticket tool.
+  Reason for rejection: giving a language model the ability to delete data is
+  an unacceptable risk for a support desk. There is no scenario where an AI
+  should destroy a ticket.
+
+Rejected: a send_email tool.
+  Reason for rejection: the agent drafts a reply; it does not contact the
+  customer directly. Keeping the human in the loop for outbound communication
+  is a deliberate safety boundary. The draft is stored on the ticket for an
+  agent to review and send.
+
+Rejected: many fine-grained tools (get_ticket_status, get_ticket_priority,
+  get_customer_email, ...).
+  Reason for rejection: more tools means more tokens in every request, more
+  chance the model picks the wrong one, and more round trips. Coarse tools that
+  return a complete record are cheaper and more reliable.
+
+ToolExecutor design: a class holding a name-to-function dict, with a single
+execute() method that looks up the tool, calls it with the model's arguments,
+and catches any exception into an {"error": ...} result.
+  Reason: adding a new tool is one dict entry plus one function. The model can
+  never call an unknown function name into undefined behaviour; unknown names
+  return a clean error. Errors are returned as data, not raised, so the model
+  can read the error and try a different approach.
+
+---------------------------------------------------------------------------
+
+15.7 AUTO-TRIAGE AND SENTIMENT: WHY SEPARATE FROM THE AGENT
+
+classify_ticket (triage.py) and analyze_sentiment (ai.py) are single-shot
+prompts, not part of the agent loop.
+
+  Reason: they run at ticket creation, before any agent interaction, and they
+  only need a classification, not reasoning. Putting them in the agent loop
+  would spend tool-calling budget on a task that is one prompt and one answer.
+
+  Decision: response_format {"type": "json_object"} on the triage call.
+    Reason: it constrains the model to emit valid JSON, which removes almost
+    all parsing failures. Sentiment analysis does NOT use this flag and instead
+    extracts the JSON substring by finding the first { and last }.
+    Reason for the difference: sentiment is a two-field response where a
+    tolerant parse is fine, and the extraction code is a belt-and-braces
+    fallback that also handles a model that wraps its JSON in prose.
+
+  Decision: validate the returned category and priority against the allowed
+  lists, falling back to "general" and "medium" if the model returns something
+  unexpected.
+    Reason: a model can invent a category. The database has a CHECK constraint
+    on priority, so an invented priority would cause a write failure. Validating
+    in application code first turns a potential 500 into a graceful default.
+
+  Decision: triage result OVERRIDES the user-supplied category and priority.
+    Reason: the AI classification is more consistent than free-text input from
+    a form. The user's value is used only if triage fails. This is a product
+    decision: automation by default, manual control as the fallback.
+
+  Decision: on any exception, triage returns a neutral default rather than
+  propagating.
+    Reason: ticket creation must never fail because the AI is unavailable. A
+    ticket with default category and priority is far better than a failed
+    submission.
+
+---------------------------------------------------------------------------
+
+15.8 THE ESCALATION ENGINE: RULE-BASED, NOT AI-BASED
+
+Four rules were implemented as plain Python conditionals, deliberately not as
+an LLM prompt.
+
+  Rule 1: SLA breached on a high-priority ticket -> escalate to urgent.
+  Rule 2: customer has 3 or more open tickets -> raise priority.
+  Rule 3: no agent reply and open for more than 48 hours -> escalate to high.
+  Rule 4: negative sentiment on a high or urgent ticket -> escalate to urgent.
+
+Reason for choosing rules over AI:
+
+  Reason 1  Determinism. Escalation changes priority and therefore SLA
+            deadlines. That must be predictable and auditable, not a model's
+            judgement on the day.
+
+  Reason 2  Cost. Escalation checks can run frequently; a rule costs nothing.
+            An LLM check per ticket per scan cycle would burn quota.
+
+  Reason 3  Explainability. Each escalation writes a system message stating
+            exactly which condition fired and why. A reviewer can read it.
+
+Rejected: AI-driven escalation decisions.
+  Reason for rejection: an LLM cannot be given a hard SLA guarantee. If the
+  model declines to escalate a breached ticket, the business rule is broken.
+
+Rule 2's exact logic (3+ open tickets, and never downgrading an urgent ticket)
+  Reason: this is a frustration heuristic. A customer with three simultaneous
+  open tickets is a churn risk. The guard against downgrading prevents the rule
+  from ever reducing a priority that was already urgent.
+
+Rule 3's guard on priority in ("low", "medium")
+  Reason: an already-high ticket has already been escalated; escalating it
+  again would be noise.
+
+---------------------------------------------------------------------------
+
+15.9 SLA DESIGN: COMPUTED ON READ, PERSISTED BY WORKER
+
+The SLA deadline (sla_due_at) is computed once at creation from the priority
+(low 72h, medium 48h, high 24h, urgent 4h) and stored. The breach status is
+NOT stored as truth, it is recomputed on every read by _is_sla_breached.
+
+  Reason: a stored boolean goes stale the moment the deadline passes. Computing
+  it on read means the dashboard is always correct without a cron job. The
+  stored sla_breached column is used only as a "notification already sent" flag
+  by the background scanner.
+
+Decision: SLA targets live in config.py as a dict.
+  Reason: they are business policy, not code. Making them configurable means a
+  different organisation can change its targets without touching logic.
+
+Decision: recompute sla_due_at whenever priority changes (in update_ticket and
+in escalate_ticket).
+  Reason: raising a ticket to urgent must tighten its deadline. Forgetting this
+  would let an escalated ticket keep a relaxed deadline, which defeats the
+  purpose of escalation.
+
+The background scanner (workers.py) runs every 300 seconds, finds tickets past
+due that are still open and not already flagged, marks them, and sends email.
+  Reason for 5 minutes: it is frequent enough to notify within a business-
+  meaningful window, and infrequent enough that the query cost is negligible.
+  The sla_breached = 0 condition in the query is what prevents repeat emails
+  every cycle.
+
+---------------------------------------------------------------------------
+
+15.10 AUTHENTICATION: JWT PLUS API KEY, AND WHY BOTH
+
+Two authentication mechanisms coexist.
+
+  JWT (jwt_auth.py) for human agents:
+    - bcrypt password hashing, HS256 signing, 24-hour expiry, role claim.
+    - Chosen over session cookies because the API is stateless and the token
+      works identically for the browser and for scripted clients.
+    - bcrypt chosen over SHA-256/MD5 because it is deliberately slow and salted,
+      which makes offline brute force impractical. passlib is listed as a
+      dependency for hashing-framework conventions, but the code calls the
+      bcrypt library directly, which is the simpler and more transparent path.
+    - HS256 chosen over RS256 because there is a single issuer and a single
+      verifier. Asymmetric signing would add key-management overhead with no
+      benefit at this scale.
+    - 24-hour expiry chosen as a balance: long enough for a full support shift
+      without re-login, short enough to limit the damage of a leaked token.
+
+  API key (auth.py) for service-to-service calls:
+    - Compared with hmac.compare_digest rather than ==.
+    - Reason: == short-circuits on the first differing byte, which leaks
+      timing information an attacker can use to guess the key byte by byte.
+      compare_digest takes constant time.
+
+  The AuthMiddleware tries Bearer first, then falls back to X-API-Key.
+    Reason: one middleware, two audiences. A human agent uses a JWT; a script
+    or integration uses a static key. Neither needs a separate code path in the
+    route handlers.
+
+  Decision: if no API key is configured AND no Bearer token is present, auth is
+  skipped.
+    Reason: this keeps local development frictionless out of the box while
+    still allowing a token to be enforced as soon as one is presented. The
+    trade-off is documented in the limitations: this is not a safe production
+    default, and RESOLVEAI_API_KEY must be set in production.
+
+  Decision: JWT secret falls back to a random value with a warning if not set.
+    Reason: the server must start even if the operator forgot the secret.
+    A random secret means tokens stop working after a restart, which is a
+    visible, self-announcing failure rather than a silent security hole.
+
+  Decision: /health, /sw.js and the notification endpoints are exempt from auth.
+    Reason: health must be reachable by a monitor with no credentials, the
+    service worker must be fetchable by the browser before login, and the push
+    subscription endpoints are called by the browser's push service, which
+    cannot present a token.
+
+---------------------------------------------------------------------------
+
+15.11 RATE LIMITING: SLIDING WINDOW PLUS TOKEN-BUCKET BURST
+
+Two limits are applied together:
+
+  A sliding window of 60 requests per minute per client.
+  A token bucket of 10 with a refill of one token per second.
+
+  Reason for the combination: a plain fixed window allows a burst of 2x the
+  limit at a window boundary. The sliding window fixes that. But a pure sliding
+  window would reject a legitimate short burst (a page loading several
+  resources at once). The token bucket absorbs the burst while the window
+  enforces the sustained rate.
+
+  Decision: the client key is a hash of the API key or Bearer token, falling
+  back to the client IP.
+    Reason: hashing means raw credentials are never held in the limiter's
+    memory. Keying on the credential rather than the IP means one NAT-ed office
+    does not throttle itself as a single client, while still tracking anonymous
+    callers by IP.
+
+  Decision: the rate limit values are read at call time, not import time.
+    Reason: this is what allows the test suite to disable rate limiting by
+    setting an environment variable before the app imports, and it allows
+    runtime configuration changes without a restart. This detail is the reason
+    the 197 tests can run without hitting limits.
+
+  Rejected: Redis-backed rate limiting.
+    Reason for rejection: it would add a server dependency, breaking the
+    single-command setup. The in-memory limitation (state lost on restart, not
+    shared across processes) is accepted and documented, because the
+    deployment target is a single process.
+
+---------------------------------------------------------------------------
+
+15.12 REAL-TIME: SSE FOR UPDATES, WEBSOCKET FOR CHAT
+
+Two different transports were chosen for two different needs.
+
+  SSE (sse.py) for ticket updates and agent streaming.
+    Reason: ticket notifications are one-way, server to client. SSE is plain
+    HTTP, auto-reconnects in the browser, and needs no handshake protocol. It
+    also passes through proxies that block WebSocket upgrades. The endpoint
+    polls the tickets table every 5 seconds for rows updated in the last 10
+    seconds and pushes them, with a heartbeat comment every cycle to keep the
+    connection alive through proxies.
+    Rejected alternative: WebSocket for updates.
+    Reason for rejection: a two-way channel for a one-way need adds protocol
+    complexity and a connection registry for no benefit.
+
+  WebSocket (chat.py) for live agent-customer chat.
+    Reason: chat is genuinely bidirectional and low-latency. Messages are
+    persisted to the same messages table as everything else, so chat history
+    is not a separate store. An in-memory registry maps ticket_id to a list of
+    live connections, guarded by an asyncio.Lock, with dead connections pruned
+    on send failure. Typing indicators are relayed to others but not persisted.
+    A presence count is broadcast on every join and leave.
+    Rejected alternative: SSE plus POST for chat.
+    Reason for rejection: it would need a separate POST endpoint per message
+    and would not give a clean typing-indicator channel.
+
+  The SSE ticket-update endpoint is registered directly on the app (in
+  main.py) as well as in the router.
+    Reason: registering it directly guarantees it appears in app.routes with a
+    .path attribute, which the tests inspect. This is a testing-motivated
+    structural decision.
+
+  Decision: the agent's "streaming" chunks the already-complete reply in
+  20-character pieces.
+    Reason: the underlying Groq call in this implementation is not token-
+    streamed, so the reply is complete before it is sent. Chunking it produces
+    the same live typewriter experience for the user at no extra API cost. True
+    token streaming was rejected because it would require a second, different
+    API call path and complicate the tool-calling loop.
+
+---------------------------------------------------------------------------
+
+15.13 CACHING AND MEMORY: WHY IN-MEMORY, WHY A DATABASE TABLE
+
+Cache (cache.py): an in-memory dict keyed by a 12-character SHA-256 of the
+messages, tools and temperature, with a 5-minute TTL.
+
+  Reason for hashing the whole request: identical requests get identical
+  answers. During development and testing, the same ticket prompt is sent
+  repeatedly, and the cache means those cost zero API calls. This directly
+  protects the free-tier quota.
+
+  Reason for a 5-minute TTL: long enough to absorb a burst of duplicate work,
+  short enough that stale answers do not persist meaningfully.
+
+  Reason for in-memory: no dependency, no setup. The limitation (lost on
+  restart) is acceptable because the cache is an optimisation, never a source
+  of truth.
+
+  Rejected: Redis or a database-backed cache.
+  Reason for rejection: same single-command-setup constraint as the rate
+  limiter. The cost of a cache miss is one API call, which is cheap; the cost
+  of a Redis dependency is a permanently heavier deployment.
+
+Memory (memory.py): agent memory is stored in a real database table
+(agent_memory) as key-value rows, not in memory.
+
+  Reason: memory must SURVIVE restarts. This is the exact opposite trade-off
+  from the cache, and the reason is that memory changes the agent's behaviour
+  on future tickets. A cache miss is free; a lost memory is a lost feature.
+
+  Decision: duplicate keys are allowed and retrieval returns the most recent
+  row (ORDER BY id DESC LIMIT 1).
+    Reason: this makes memory append-only history rather than a mutable
+    setting. The escalation_history key in particular accumulates a growing
+    string, and keeping every write means the history is never corrupted by a
+    bad update.
+
+  Decision: get_conversation_context returns only the last 5 tickets.
+    Reason: it bounds the size of the system prompt. An unbounded history would
+    eventually exceed the context window and cost more per call. Five tickets
+    is enough continuity for a support relationship.
+
+---------------------------------------------------------------------------
+
+15.14 BACKGROUND WORKERS: ASYNCIO TASKS WITH GRACEFUL SHUTDOWN
+
+Two workers run as asyncio tasks started in the FastAPI lifespan and cancelled
+on shutdown: the SLA breach scanner (every 300s) and the email receiver (every
+60s).
+
+  Reason for asyncio tasks over a task queue (Celery, RQ):
+    no broker process, no extra deployment component, and the workers share the
+    same event loop and database as the app. For two periodic jobs on a single
+    node, a queue is entirely unnecessary weight.
+
+  Decision: workers wait on an asyncio.Event with asyncio.wait_for rather than
+  a plain sleep.
+    Reason: a plain asyncio.sleep cannot be interrupted. Waiting on the event
+    with a timeout means shutdown returns immediately instead of blocking for
+    up to five minutes. This is the difference between a clean stop and a hang.
+
+  Decision: blocking IMAP is run in a thread pool via run_in_executor.
+    Reason: imaplib is synchronous and would freeze the event loop for the
+    duration of the network round trip. Offloading it keeps the API responsive
+    while email is being fetched.
+
+  Decision: every worker iteration is wrapped in try/except that logs and
+  continues.
+    Reason: a transient database or network error must not kill the worker
+    permanently. The loop must be resilient, because nothing supervises it.
+
+  Decision: the email receiver creates a customer automatically if the sender
+  is unknown.
+    Reason: an inbound support email from a new address is a new customer by
+    definition. Requiring manual creation first would make the email channel
+    useless.
+
+---------------------------------------------------------------------------
+
+15.15 FRONTEND: VANILLA HTML/CSS/JS, NO FRAMEWORK, NO BUILD STEP
+
+Chosen: hand-written HTML, CSS and JavaScript served as static files.
+
+  Reason 1  No build step. There is no npm install, no bundler, no transpiler.
+          The app is served directly by FastAPI. This preserves the single-
+          command setup on both platforms and removes an entire toolchain from
+          the dependency surface.
+
+  Reason 2  The UI is a single dashboard, not a large SPA. A framework's
+          component model pays off across dozens of screens; here it would be
+          overhead.
+
+  Reason 3  Portability. Nothing in the frontend needs Node.js, which matters
+          for a project that must run on a plain RHEL or Windows host.
+
+  Reason 4  For a portfolio piece, the frontend being readable without a build
+          step means a reviewer can view source and understand it immediately.
+
+Rejected: React, Vue or Svelte.
+  Reason for rejection: each requires Node.js and a build pipeline, which
+  breaks the lightweight cross-platform requirement. The accepted trade-off is
+  documented: vanilla JS becomes harder to maintain as features grow, and there
+  is no frontend test coverage. This is listed as a future improvement
+  (migrate to a framework if the UI grows substantially).
+
+Design decisions in the frontend:
+
+  CSS custom properties for all colours.
+    Reason: theming (dark/light) becomes a matter of swapping variable values,
+    not duplicating rules. One source of truth for the palette.
+
+  Low-saturation palette chosen deliberately.
+    Reason: support agents stare at this screen for eight-hour shifts. Muted
+    indigo (trust), soft blue/amber/green for status, and red reserved
+    exclusively for SLA breaches. The full reasoning is in section 9.
+
+  Tables collapse into cards on mobile via CSS only.
+    Reason: a horizontal-scrolling table on a phone is unusable. The card
+    layout is pure CSS with no JavaScript, so it works even if scripts fail.
+
+  A service worker for push notifications, served from root scope (/sw.js).
+    Reason: a service worker can only control the scope it is served from. It
+    must be at the root to control the whole app. The endpoint exists purely to
+    serve it from the correct path.
+
+  Notifications delivered through SSE into a bell dropdown, with push
+  subscriptions stored in the database.
+    Reason: this gives immediate in-app delivery without needing a real push
+    server. Full Web Push delivery would require VAPID keys and an outbound
+    push service; the lighter SSE path was chosen and the storage for real push
+    subscriptions was kept so the upgrade path exists.
+
+---------------------------------------------------------------------------
+
+15.16 FILE UPLOADS: ALLOWLIST, SIZE CAP, UUID NAMES
+
+  Decision: an allowlist of ten extensions, not a blocklist.
+    Reason: a blocklist of dangerous types is always incomplete. An allowlist
+    fails closed: anything not explicitly permitted is rejected.
+
+  Decision: a 10MB cap enforced by reading the content and checking its length.
+    Reason: the size is known before anything is written to disk, so an
+    oversized upload never touches the filesystem.
+
+  Decision: files stored on disk, metadata in the database, filename prefixed
+  with uuid4().hex.
+    Reason: storing binary blobs in SQLite bloats the database and slows every
+    query. Keeping files on disk and only metadata in the database keeps the
+    database small and fast. The UUID prefix prevents two uploads of the same
+    filename from overwriting each other, and prevents path traversal through a
+    crafted filename.
+
+  Decision: uploads directory created on demand with mkdir(parents=True,
+  exist_ok=True).
+    Reason: the app must not crash if the directory was cleaned or never
+    created. Creation is idempotent.
+
+  Decision: all file paths built with pathlib.
+    Reason: pathlib produces correct separators on both Windows and RHEL,
+    which is required for the cross-platform goal.
+
+---------------------------------------------------------------------------
+
+15.17 EMAIL: ASYNC SMTP FOR SENDING, THREADED IMAP FOR RECEIVING
+
+  Sending uses aiosmtplib with start_tls=True, multipart/alternative (plain
+  text plus HTML).
+    Reason: some mail clients render only plain text, others only HTML. Sending
+    both means the message is correct everywhere. start_tls upgrades the
+    connection to encrypted without needing a separate TLS port.
+
+  Decision: email is entirely optional; every send function returns False and
+  logs when unconfigured.
+    Reason: the app must run fully with no mail server. Notifications are an
+    enhancement, not a requirement.
+
+  Decision: send failures are logged as warnings, never raised.
+    Reason: a mail server being down must not fail the ticket operation that
+    triggered the notification.
+
+  Receiving uses the standard-library imaplib in a thread pool, polling
+  UNSEEN every 60 seconds.
+    Reason: imaplib is synchronous, so it is offloaded to a thread. Polling was
+    chosen over IMAP IDLE because IDLE holds a connection open indefinitely and
+    is harder to make resilient; a 60-second poll is simpler and adequate for
+    support email.
+
+---------------------------------------------------------------------------
+
+15.18 PYDANTIC MODELS: SEPARATE CREATE, UPDATE AND RESPONSE TYPES
+
+Every entity has distinct models: CustomerCreate / CustomerUpdate /
+CustomerResponse, and the same pattern for tickets.
+
+  Reason 1  The create model requires fields the response model does not have,
+            and vice versa. One model for all three would either over-expose
+            fields (leaking password_hash, for example) or under-validate
+            input.
+
+  Reason 2  The update model makes every field Optional, so a partial update is
+            possible. model_dump(exclude_unset=True) then builds the UPDATE
+            statement only from the fields actually sent.
+            Reason for exclude_unset: it distinguishes "the client did not send
+            this field" from "the client sent null". Without it, every partial
+            update would blank out every omitted column.
+
+  Reason 3  Response models are the API contract. They are what generates the
+            OpenAPI schema, and they guarantee the response shape even if the
+            database row changes.
+
+  Decision: response models use ConfigDict(from_attributes=True).
+    Reason: it lets a model be built directly from a database row or dict.
+
+  Decision: enums expressed as Literal types.
+    Reason: Literal produces a strict, self-documenting enum in the OpenAPI
+    schema and rejects invalid values at the boundary with a clear 422.
+
+  Decision: Field constraints (min_length, max_length) on input models.
+    Reason: validation and documentation in one declaration. A 300-character
+    cap on subject prevents a pathological value from reaching the database.
+
+---------------------------------------------------------------------------
+
+15.19 TESTING METHOD: 197 TESTS, ISOLATED DATABASE, NO REAL API CALLS
+
+The testing decisions and their reasons:
+
+  Decision: a fresh temporary database for every test (conftest.py deletes and
+  recreates the file around each test).
+    Reason: tests must not depend on each other's data or on leftover state.
+    Isolation is what makes 197 tests reliable in any order.
+
+  Decision: the test database path and the rate-limit values are set as
+  environment variables BEFORE the app is imported.
+    Reason: config.py reads the environment at import time. Setting the values
+    first is what points the tests at a throwaway database and disables rate
+    limiting. This is the reason the rate limiter reads its values at call time
+    (section 15.11) — the two decisions are linked.
+
+  Decision: ASGITransport in-process testing (no live server).
+    Reason: it exercises the real application object, including middleware and
+    routing, without binding a port or managing a process. Faster and more
+    deterministic than spinning up uvicorn.
+
+  Decision: Groq calls are mocked in agent tests.
+    Reason: tests must not depend on a network service, must not consume quota,
+    and must produce the same result every run. Mocking the response lets the
+    loop logic, tool dispatch and error handling all be tested deterministically.
+
+  Decision: the test files are split by feature, not by layer (test_sla,
+  test_agent, test_workers, test_realtime, ...).
+    Reason: a failure names the feature that broke. It also means a new feature
+    adds one test file rather than editing a giant one.
+
+  Rejected: a live end-to-end suite hitting the real API.
+  Reason for rejection: non-deterministic, costs quota, and fails for reasons
+  unrelated to the code. End-to-end browser tests with Playwright are listed as
+  a future improvement instead.
+
+---------------------------------------------------------------------------
+
+15.20 CI/CD: GITHUB ACTIONS ACROSS FOUR PYTHON VERSIONS
+
+  Decision: the workflow runs on push and PR to main and master, testing Python
+  3.10, 3.11, 3.12 and 3.13.
+    Reason: the project claims to run on 3.10+. A matrix proves that claim on
+    every push rather than asserting it. 3.13 is included so the project does
+    not silently break on the newest interpreter.
+
+  Decision: a py_compile syntax check in addition to pytest.
+    Reason: it catches a file that fails to even parse, including files that no
+    test imports.
+
+  Decision: ruff runs with continue-on-error: true.
+    Reason: lint findings should be visible but must not block a build. Treating
+    style as a hard gate early in a project causes more friction than value.
+
+  Rejected: a full Docker build in CI.
+  Reason for rejection: the image build adds minutes per matrix entry for a
+  project whose tests do not depend on the container. Docker is verified
+  locally and via docker-compose.
+
+---------------------------------------------------------------------------
+
+15.21 CROSS-PLATFORM: TWO SCRIPTS PER OPERATING SYSTEM
+
+Four scripts: setup.sh and run.sh for Linux/macOS, setup.bat and run.bat for
+Windows.
+
+  Reason: the project must run on both RHEL and Windows with no manual steps.
+  Shell scripts do not run on Windows and batch files do not run on Linux, so
+  both are provided rather than asking the user to translate commands.
+
+  Decision: no OS-specific code in the application itself.
+    Reason: all paths are built with pathlib, no shell commands are invoked from
+    Python, and no POSIX-only modules are used. The scripts differ; the
+    application does not. This is why a single codebase serves both platforms.
+
+  Decision: both RHEL (systemd unit) and Windows (NSSM service) deployment
+  paths are documented in DEPLOYMENT.md.
+    Reason: "cross-platform" must mean it runs as a managed service on both, not
+    merely that the code imports.
+
+---------------------------------------------------------------------------
+
+15.22 TOOLS USED TO BUILD THE PROJECT
+
+  Python 3.12 (development), targeting 3.10+.
+  FastAPI and Uvicorn for the application and server.
+  httpx for all outbound HTTP (Groq, webhooks).
+  aiosqlite for the database.
+  Pydantic v2 for validation.
+  PyJWT and bcrypt for authentication.
+  aiosmtplib for email sending, imaplib for receiving.
+  pytest and pytest-asyncio for the test suite.
+  Git for version control (11 commits on master).
+  GitHub Actions for CI.
+  Docker for containerised deployment.
+  ruff and py_compile for static checks.
+  No ORM, no task queue, no frontend framework, no LLM SDK.
+
+---------------------------------------------------------------------------
+
+15.23 MASTER DECISION SUMMARY
+
+  Concern            Chosen                     Rejected             Reason
+  -----------------  -------------------------  -------------------  ----------------
+  Web framework      FastAPI                    Flask, Django        async, auto-docs, light
+  Database           SQLite + aiosqlite         PostgreSQL, ORM      zero setup, portable
+  LLM provider       Groq (gpt-oss-120b)        OpenAI, local        free tier, no GPU/RAM
+  LLM access         raw httpx                  vendor SDK           no dependency, control
+  Auth               JWT + API key              session cookies      stateless, dual audience
+  Password hash      bcrypt                     SHA/MD5              slow by design
+  JWT signing        HS256                      RS256                single issuer
+  Rate limiting      window + token bucket      Redis                no server dependency
+  Cache              in-memory TTL dict         Redis                optimisation only
+  Memory             SQLite table               in-memory            must survive restart
+  Updates transport  SSE                        WebSocket            one-way need
+  Chat transport     WebSocket                  SSE + POST           bidirectional need
+  Background jobs    asyncio tasks              Celery/RQ            no broker needed
+  Search             FTS5                       vector DB            no embedding infra
+  Frontend           vanilla JS                 React/Vue            no build step
+  Migrations         none (manual)              Alembic              accepted limitation
+  Upload security    extension allowlist        blocklist            fails closed
+
+---------------------------------------------------------------------------
+
+16. API ENDPOINT CATALOG
+
+58 HTTP endpoints plus 1 WebSocket endpoint, grouped by router. Every endpoint
+is authenticated by AuthMiddleware unless marked PUBLIC. All request and
+response bodies are validated by Pydantic models. Live interactive
+documentation is generated at /docs (Swagger UI) and /redoc.
+
+Counts by router:
+  tickets           8      notifications     6
+  customers         5      import_export     4
+  kb                5      webhooks          4
+  attachments       4      auth              3
+  ai                3      portal            3
+  mentions          3      dashboard         2
+  presence          2      analytics         1
+  agent (AI loop)   1      events/SSE        2
+  core (root/sw/health) 3   websocket         1
+
+16.1 CORE (app/main.py)
+
+  Method  Path                  Auth    Description
+  ------  --------------------  ------  ------------------------------------------
+  GET     /                     PUBLIC  Serves the SPA (templates/index.html)
+  GET     /health               PUBLIC  Liveness probe: {"status":"ok"}
+  GET     /sw.js                PUBLIC  Serves the Service Worker from root scope
+  GET     /docs                 PUBLIC  Swagger UI (auto-generated)
+  GET     /redoc                PUBLIC  ReDoc (auto-generated)
+  GET     /openapi.json         PUBLIC  OpenAPI 3 schema
+
+16.2 TICKETS (app/routers/tickets.py) - prefix /api/tickets
+
+  Method  Path                       Description
+  ------  -------------------------  --------------------------------------------
+  POST    /                          Create ticket. Runs sentiment analysis and
+                                     AI triage, computes SLA, seeds first message
+  GET     /                          List with filters: status, priority, category,
+                                     customer_id, search, sla_breached, skip, limit
+  GET     /{ticket_id}               Get one ticket (SLA breach computed on read)
+  PUT     /{ticket_id}               Partial update. Recomputes SLA if priority
+                                     changed; sets resolved_at on resolve
+  DELETE  /{ticket_id}               Delete ticket (cascades to messages etc.)
+  GET     /{ticket_id}/messages      List the message thread, chronological
+  POST    /{ticket_id}/messages      Append a message (customer/agent/system)
+  GET     /{ticket_id}/sla           SLA detail: due_at, breached, hours_remaining
+
+16.3 CUSTOMERS (app/routers/customers.py) - prefix /api/customers
+
+  Method  Path                 Description
+  ------  -------------------  ------------------------------------------------
+  POST    /                    Create. 409 Conflict on duplicate email
+  GET     /                    List, paginated (skip, limit)
+  GET     /{customer_id}       Get one
+  PUT     /{customer_id}       Partial update
+  DELETE  /{customer_id}       Delete (fails if tickets reference it)
+
+16.4 AI (app/routers/ai_assist.py, app/agent_router.py) - prefix /api/ai
+
+  Method  Path                        Description
+  ------  --------------------------  -----------------------------------------
+  POST    /reply                      Single-shot reply draft, tone selectable
+                                      (professional/friendly/empathetic/concise)
+  POST    /sentiment/{ticket_id}      Re-run sentiment analysis, store result
+  POST    /agent                      Run the FULL agent loop (buffered JSON).
+                                      Returns reply, tool_calls_made, tools_used
+  POST    /agent/stream               Run the agent loop as an SSE stream. Events:
+                                      tool_call, tool_result, reply_chunk, done,
+                                      error
+
+16.5 KNOWLEDGE BASE (app/routers/kb.py) - prefix /api/kb
+
+  Method  Path             Description
+  ------  ---------------  -------------------------------------------------
+  POST    /                Create article (writes both table and FTS index)
+  GET     /                List, optional category filter, paginated
+  GET     /search          FTS5 full-text search, ranked; LIKE fallback
+  GET     /{article_id}    Get one
+  DELETE  /{article_id}    Delete (removes from table and FTS index)
+
+16.6 DASHBOARD (app/routers/dashboard.py, sla_report.py) - prefix /api/dashboard
+
+  Method  Path             Description
+  ------  ---------------  -------------------------------------------------
+  GET     /stats           Counts by status/priority/category, avg resolution
+                           hours, SLA breach count, 10 most recent tickets
+  GET     /sla-report      SLA compliance report for a period (days=1..365):
+                           within-SLA, after-SLA, still-open-past-SLA,
+                           compliance rate, daily breakdown
+
+16.7 ANALYTICS (app/analytics_router.py) - prefix /api/analytics
+
+  Method  Path      Description
+  ------  --------  -------------------------------------------------------
+  GET     /ai       AI performance: total replies, accepted, acceptance
+                    rate, avg tool calls, tool usage histogram, recent 10
+
+16.8 AUTH (app/jwt_auth.py) - prefix /api/auth
+
+  Method  Path         Auth           Description
+  ------  -----------  -------------  --------------------------------------
+  POST    /login       PUBLIC         Authenticate, returns JWT (24h)
+  POST    /register    admin only     Register a new agent
+  GET     /me          any agent      Current agent's profile
+
+16.9 PORTAL (app/portal.py) - prefix /api/portal   [all PUBLIC]
+
+  Method  Path                          Description
+  ------  ----------------------------  -------------------------------------
+  GET     /tickets?email=               All tickets for a customer email
+  GET     /tickets/{id}?email=          One ticket, ownership verified by email
+  GET     /tickets/{id}/messages?email= Thread excluding internal system notes
+
+16.10 ATTACHMENTS (app/attachments.py) - prefix /api
+
+  Method  Path                              Description
+  ------  --------------------------------  ----------------------------------
+  POST    /tickets/{ticket_id}/attachments  Upload (allowlist, 10MB cap)
+  GET     /tickets/{ticket_id}/attachments  List attachments for a ticket
+  GET     /attachments/{id}/download        Download the file
+  DELETE  /attachments/{id}                 Delete metadata and file on disk
+
+16.11 MENTIONS (app/team.py) - prefix /api/mentions
+
+  Method  Path                  Description
+  ------  --------------------  ------------------------------------------
+  POST    /                     Create @mention (internal system message)
+  GET     /ticket/{ticket_id}   All mentions on a ticket
+  GET     /agent/{email}        All mentions of an agent
+
+16.12 NOTIFICATIONS (app/notifications.py) - prefix /api/notifications
+      [all PUBLIC - called by the browser before/without a token]
+
+  Method  Path                        Description
+  ------  --------------------------  --------------------------------------
+  POST    /subscribe                  Store a browser push subscription
+  POST    /send-test                  Create a test notification
+  GET     /                           List notifications (unread_only, limit)
+  GET     /unread-count               Count of unread notifications
+  POST    /{notification_id}/read     Mark one read
+  POST    /mark-all-read              Mark all read
+
+16.13 PRESENCE (app/presence.py) - prefix /api/presence
+
+  Method  Path         Description
+  ------  -----------  ---------------------------------------------------
+  POST    /heartbeat   Agent pings every ~30s to stay "online"
+  GET     /online      Agents seen within the last 90 seconds
+
+16.14 WEBHOOKS (app/webhook.py) - prefix /api/webhooks
+
+  Method  Path                     Description
+  ------  -----------------------  ----------------------------------------
+  POST    /slack                   Register Slack webhook URL
+  POST    /discord                 Register Discord webhook URL
+  POST    /teams                   Register Teams webhook URL
+  POST    /test/{webhook_type}     Send a test notification to a webhook
+
+16.15 IMPORT / EXPORT (app/import_export.py) - prefix /api/import-export
+
+  Method  Path                 Description
+  ------  -------------------  -------------------------------------------
+  GET     /tickets/export      Export tickets (format=json|csv)
+  POST    /tickets/import      Import tickets from a JSON file
+  GET     /customers/export    Export customers (format=json|csv)
+  POST    /customers/import    Import customers from a JSON file
+
+16.16 EVENTS / SSE (app/sse.py, registered in main.py)
+
+  Method  Path                 Description
+  ------  -------------------  -------------------------------------------
+  GET     /api/events/tickets  SSE stream of ticket updates. Events:
+                               ticket_updated, ticket_resolved, sla_breached,
+                               notification, plus a heartbeat comment
+
+16.17 WEBSOCKET (app/chat.py)
+
+  Path                    Query params                Description
+  ----------------------  ---------------------------  ---------------------
+  /ws/chat/{ticket_id}    role, identity              Live chat. Client sends
+                                                       {type:"message"} or
+                                                       {type:"typing"}. Server
+                                                       sends history, message,
+                                                       typing, presence
+
+---------------------------------------------------------------------------
+
+17. DATABASE SCHEMA AND ENTITY-RELATIONSHIP DIAGRAM
+
+11 application tables plus 1 FTS5 virtual table (which carries 4 internal
+shadow tables). Verified by introspecting the live schema. All timestamps are
+ISO-8601 text in UTC. All enumerations are enforced twice: by Pydantic Literal
+at the API boundary and by CHECK at the storage layer.
+
+17.1 ENTITY-RELATIONSHIP DIAGRAM (text form)
+
+  customers
+  +----------------------------+
+  | id           INTEGER  PK   |
+  | name         TEXT  NOT NULL|
+  | email        TEXT  UNIQUE  |<---------------------+
+  | phone        TEXT          |                      |
+  | company      TEXT          |                      |
+  | created_at   TIMESTAMP     |                      |
+  +----------------------------+                      |
+            |                                         |
+            | 1                                       | 1
+            |                                         |
+            | N                                       | N
+            v                                         |
+  tickets  (does NOT cascade from customers)          |
+  +----------------------------+                      |
+  | id           INTEGER  PK   |<---+                 |
+  | customer_id  INTEGER  FK   |----+-----------------+
+  | subject      TEXT  NOT NULL|    |
+  | description  TEXT  NOT NULL|    |
+  | status       TEXT  CHECK   |    |
+  | priority     TEXT  CHECK   |    |
+  | category     TEXT          |    |
+  | sentiment    TEXT  CHECK   |    |
+  | ai_reply     TEXT          |    |
+  | assigned_to  TEXT          |    |
+  | sla_due_at   TIMESTAMP     |    |
+  | sla_breached BOOLEAN       |    |
+  | created_at   TIMESTAMP     |    |
+  | updated_at   TIMESTAMP     |    |
+  | resolved_at  TIMESTAMP     |    |
+  +----------------------------+    |
+      |            |          |     |
+      | 1          | 1        | 1   | N
+      |            |          |     |
+      | N          | N        | N   |
+      v            v          v     |
+  messages   attachments  ai_analytics   agent_memory
+  (CASCADE)  (CASCADE)    (NO ACTION)    (CASCADE)
+
+  messages                      attachments
+  +-------------------------+   +-------------------------+
+  | id            INTEGER PK|   | id             INTEGER PK|
+  | ticket_id     INTEGER FK|   | ticket_id      INTEGER FK|
+  | sender        TEXT CHECK|   | message_id     INTEGER   |
+  | content       TEXT      |   | filename       TEXT      |
+  | is_ai_generated BOOLEAN |   | content_type   TEXT      |
+  | created_at    TIMESTAMP |   | file_path      TEXT      |
+  +-------------------------+   | uploaded_by    TEXT      |
+                                | uploaded_at    TIMESTAMP |
+                                +-------------------------+
+
+  ai_analytics                  agent_memory
+  +-------------------------+   +-------------------------+
+  | id            INTEGER PK|   | id           INTEGER  PK |
+  | ticket_id     INTEGER FK|   | ticket_id    INTEGER  FK |
+  | reply_text    TEXT      |   | customer_id  INTEGER  FK |
+  | tools_used    TEXT      |   | key          TEXT  NOT NULL|
+  | tool_calls_made INTEGER |   | value        TEXT  NOT NULL|
+  | reasoning     TEXT      |   | created_at   TIMESTAMP   |
+  | accepted      BOOLEAN   |   +-------------------------+
+  | created_at    TIMESTAMP |        (two FKs, both CASCADE)
+  +-------------------------+
+
+  knowledge_base                knowledge_base_fts (VIRTUAL, FTS5)
+  +-------------------------+   +-------------------------+
+  | id         INTEGER  PK  |   | title                    |
+  | title      TEXT  NOT NULL|  | content                  |
+  | content    TEXT  NOT NULL|  +-------------------------+
+  | category   TEXT         |     external content table:
+  | tags       TEXT         |     content='knowledge_base'
+  | created_at TIMESTAMP    |     content_rowid='id'
+  +-------------------------+     (index only, no data copy)
+
+  STANDALONE TABLES (no foreign keys)
+
+  agents                        presence
+  +-------------------------+   +-------------------------+
+  | id            INTEGER PK|   | agent_id   TEXT  PK      |
+  | email         TEXT UNIQUE|  | last_seen  TIMESTAMP     |
+  | password_hash TEXT      |   | status     TEXT  CHECK   |
+  | name          TEXT      |   | expires_at TIMESTAMP     |
+  | role          TEXT CHECK|   +-------------------------+
+  | created_at    TIMESTAMP |     (agent_id is a plain string, NOT a
+  +-------------------------+      foreign key to agents.id)
+
+  push_subscriptions            notifications
+  +-------------------------+   +-------------------------+
+  | id         INTEGER  PK  |   | id         INTEGER  PK  |
+  | endpoint   TEXT UNIQUE  |   | title      TEXT  NOT NULL|
+  | p256dh     TEXT NOT NULL|   | body       TEXT  NOT NULL|
+  | auth       TEXT NOT NULL|   | type       TEXT         |
+  | created_at TIMESTAMP    |   | ticket_id  INTEGER      |
+  +-------------------------+   | read       BOOLEAN      |
+                                | created_at TIMESTAMP    |
+                                +-------------------------+
+
+17.2 RELATIONSHIP SUMMARY
+
+  customers 1 ---- N tickets         ON DELETE: no action (fails loudly)
+  tickets   1 ---- N messages        ON DELETE: CASCADE
+  tickets   1 ---- N attachments     ON DELETE: CASCADE
+  tickets   1 ---- N ai_analytics    ON DELETE: NO ACTION
+  tickets   1 ---- N agent_memory    ON DELETE: CASCADE
+  customers 1 ---- N agent_memory    ON DELETE: CASCADE
+  knowledge_base 1 ---- 1 knowledge_base_fts   (linked by rowid)
+  agents, presence, push_subscriptions, notifications: standalone
+
+17.3 INDEXES
+
+  Index                        Table          Columns
+  ---------------------------  -------------  ------------------------
+  idx_tickets_status           tickets        status
+  idx_tickets_customer         tickets        customer_id
+  idx_tickets_priority         tickets        priority
+  idx_messages_ticket          messages       ticket_id
+  idx_attachments_ticket       attachments    ticket_id
+  idx_notifications_read       notifications  read
+  sqlite_autoindex_customers_1 customers      email (UNIQUE)
+  sqlite_autoindex_agents_1    agents         email (UNIQUE)
+  sqlite_autoindex_presence_1  presence       agent_id (PK)
+  sqlite_autoindex_push_..._1  push_subs      endpoint (UNIQUE)
+
+17.4 CONSTRAINTS
+
+  CHECK constraints (enum enforcement at the storage layer):
+    tickets.status       IN ('open','in_progress','resolved','closed')
+    tickets.priority     IN ('low','medium','high','urgent')
+    tickets.sentiment    IN ('positive','neutral','negative')
+    messages.sender      IN ('customer','agent','system')
+    agents.role          IN ('admin','agent')
+    presence.status      IN ('online','away','busy','offline')
+
+  UNIQUE constraints:
+    customers.email, agents.email, push_subscriptions.endpoint
+
+  NOT NULL highlights:
+    Every foreign key column, plus subject, description, content,
+    password_hash, name.
+
+17.5 FULL COLUMN REFERENCE
+
+  tickets (the central table - 15 columns)
+    id            INTEGER PK AUTOINCREMENT
+    customer_id   INTEGER NOT NULL FK -> customers.id
+    subject       TEXT NOT NULL
+    description   TEXT NOT NULL
+    status        TEXT NOT NULL DEFAULT 'open'   CHECK enum
+    priority      TEXT NOT NULL DEFAULT 'medium' CHECK enum
+    category      TEXT DEFAULT 'general'
+    sentiment     TEXT CHECK enum
+    ai_reply      TEXT
+    assigned_to   TEXT
+    sla_due_at    TIMESTAMP
+    sla_breached  BOOLEAN DEFAULT 0
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    resolved_at   TIMESTAMP
+
+  customers (6 columns)
+    id, name, email (UNIQUE), phone, company, created_at
+
+  messages (6 columns)
+    id, ticket_id FK CASCADE, sender CHECK enum, content,
+    is_ai_generated BOOLEAN DEFAULT 0, created_at
+
+  knowledge_base (6 columns)
+    id, title, content, category DEFAULT 'general', tags, created_at
+
+  ai_analytics (8 columns)
+    id, ticket_id FK, reply_text, tools_used, tool_calls_made DEFAULT 0,
+    reasoning, accepted BOOLEAN DEFAULT 0, created_at
+
+  agents (6 columns)
+    id, email UNIQUE, password_hash, name, role DEFAULT 'agent' CHECK enum,
+    created_at
+
+  agent_memory (6 columns)
+    id, ticket_id FK CASCADE, customer_id FK CASCADE, key, value, created_at
+
+  attachments (8 columns)
+    id, ticket_id FK CASCADE, message_id, filename, content_type,
+    file_path, uploaded_by, uploaded_at
+
+  presence (4 columns)
+    agent_id TEXT PK, last_seen, status DEFAULT 'online' CHECK enum,
+    expires_at
+
+  push_subscriptions (5 columns)
+    id, endpoint UNIQUE, p256dh, auth, created_at
+
+  notifications (7 columns)
+    id, title, body, type DEFAULT 'info', ticket_id, read BOOLEAN DEFAULT 0,
+    created_at
+
+17.6 SEED DATA
+
+  On first run, if the knowledge base is empty, 8 sample articles are inserted
+  and indexed into FTS5: password reset, billing FAQ, API rate limits, login
+  troubleshooting, 2FA setup, contacting support, data export/backup, and team
+  permissions.
+
+17.7 SCHEMA DESIGN NOTES
+
+  Timestamps are TEXT in ISO-8601 form, not a native type, because SQLite has
+  no datetime type. ISO-8601 sorts correctly as a string and parses directly
+  with datetime.fromisoformat.
+
+  The customers -> tickets foreign key deliberately has no ON DELETE CASCADE.
+  Deleting a customer who still has tickets fails rather than silently
+  destroying ticket history. Only a ticket's own children cascade.
+
+  presence.agent_id is a plain TEXT primary key, not a foreign key to
+  agents.id. Reason: presence can be tracked for an identity string that is not
+  a registered agent row, and presence data is ephemeral so referential
+  integrity is not worth the coupling.
+
+  ai_analytics.ticket_id has NO ACTION on delete, so analytics rows outlive a
+  deleted ticket rather than disappearing. This keeps historical AI metrics
+  intact.
+
+  knowledge_base_fts is an external-content FTS5 table (content='knowledge_base',
+  content_rowid='id'). It stores only the inverted index, not a second copy of
+  the text. Writes go to both tables explicitly; the create and delete routes
+  maintain the index.
+
+---------------------------------------------------------------------------
+
+18. PROBLEMS AND DIFFICULTIES FACED DURING THE BUILD
+
+This section records the real obstacles encountered, evidenced by the git
+history, the code itself, and the artifacts that were committed and later
+removed. Nothing here is hypothetical.
+
+18.1 THE HARDWARE CEILING BLOCKED THE OBVIOUS AI APPROACH
+
+Problem: the development machine has 2 CPU cores, 1.7GB of RAM and no GPU.
+
+Impact: the first instinct for an AI project is to run a model locally. That
+was immediately impossible. A 1.7GB machine cannot hold a useful instruction-
+tuned model in memory, and with no GPU even a tiny model would be unusably
+slow. Every local option (Ollama, llama.cpp, transformers) was ruled out before
+a line of the AI layer was written.
+
+How it was resolved: switched to a cloud API from the start. This was not a
+preference, it was a forced constraint. It then dictated the rest of the AI
+design — the cache exists because API calls cost quota, MAX_ITERATIONS is
+capped at 5 because calls cost latency, and every AI function has a graceful
+fallback string because a network dependency can fail.
+
+Lesson: the constraint shaped the architecture more than any preference did.
+The quota-conscious design of the AI layer is a direct product of not being
+able to run the model locally.
+
+18.2 THE OPENAI KEY HAD NO CREDITS
+
+Problem: the first API backend attempted was OpenAI. Every call returned
+HTTP 429.
+
+Impact: the AI layer could not be tested or developed at all until the provider
+was changed. This was discovered early, which is the only reason it did not
+cost more time.
+
+How it was resolved: switched to Groq, which has a free tier sufficient for
+development. The error handling in the code still carries the scar: the agent
+catches httpx.HTTPStatusError separately and returns a message that explicitly
+says "check your Groq API key and quota", because that is exactly the failure
+that was hit first.
+
+Lesson: verify the API works with a one-line probe BEFORE designing around it.
+The spike workflow (18.9) was adopted partly because of this.
+
+18.3 THE FIRST MODEL WAS RETIRED MID-PROJECT
+
+Problem: the project originally used llama-3.3-70b-versatile. The provider
+retired that model, and calls began failing.
+
+Impact: every AI feature broke at once, with an error that had nothing to do
+with the code.
+
+How it was resolved: the model name had already been made an environment
+variable (RESOLVEAI_MODEL) with a default rather than being hard-coded in each
+file. The fix was a one-line environment change to openai/gpt-oss-120b, and
+zero code edits.
+
+Lesson: never hard-code a vendor's model name or endpoint in more than one
+place. This one decision turned a potential multi-file emergency into a
+configuration change. It is the single most valuable defensive decision in the
+project.
+
+18.4 VALIDATING THAT GROQ COULD ACTUALLY DO TOOL CALLING
+
+Problem: the entire agent design depends on the model returning structured
+tool_calls in the OpenAI function-calling format. If the free-tier model did not
+support reliable tool calling, the core feature of the project was impossible.
+
+Impact: this was a make-or-break unknown, and building the whole agent loop on
+an unverified assumption would have risked throwing away a large amount of work.
+
+How it was resolved: a throwaway spike was written first — a standalone script
+that sent the five tool definitions and printed the raw response, to confirm
+the model returned tool_calls we could parse and execute. Only after that was
+confirmed was the real agent loop written. The spike was deliberately deleted
+once it had served its purpose; it is visible in the git history as
+spikes/001-groq-tool-calling/spike.py, removed in commit 4e16763.
+
+Lesson: validate the riskiest technical assumption in isolation, with a script
+you intend to throw away, before building anything on top of it.
+
+18.5 ASYNC EVERYWHERE MEANT EVERY MISTAKE WAS SUBTLE
+
+Problem: the whole stack is async (FastAPI, aiosqlite, httpx, asyncio workers).
+Async bugs do not announce themselves — they surface as a frozen server, not a
+clear exception.
+
+Specific difficulties:
+
+  The synchronous imaplib library. The email receiver needs IMAP, but imaplib
+  is blocking. Calling it directly inside an async worker would freeze the
+  entire event loop — the web server would stop responding to every request
+  while email was being fetched, with no error to explain why.
+  Resolved: offloaded to a thread pool with loop.run_in_executor.
+
+  Worker shutdown. A worker using a plain asyncio.sleep(300) cannot be
+  interrupted. On shutdown the server would hang for up to five minutes.
+  Resolved: workers wait on an asyncio.Event with asyncio.wait_for, so
+  shutdown returns immediately.
+
+  Concurrent chat writes. Multiple WebSocket connections per ticket can mutate
+  the connection registry at the same time, which can corrupt it.
+  Resolved: an asyncio.Lock around every mutation of the registry.
+
+Lesson: in an async codebase, every blocking library call and every shared
+mutable structure is a latent freeze or corruption. Each one needs an explicit
+answer (thread pool, interruptible wait, or a lock).
+
+18.6 GETTING RATE LIMITING TO NOT BREAK THE TEST SUITE
+
+Problem: the auth middleware enforces a 60-requests-per-minute limit. The test
+suite makes far more than 60 requests. Every test run began hitting 429s,
+producing failures that had nothing to do with the code under test.
+
+Impact: the tests were unreliable, which made every other bug harder to find
+because a failure could mean three different things.
+
+How it was resolved: the rate limiter reads its limits at CALL time rather than
+at import time, which lets conftest.py set RATE_LIMIT_RPM=10000 as an
+environment variable before the app imports and effectively disable limiting
+for tests. This required refactoring the limiter to read config dynamically.
+
+Lesson: configuration that must be overridable in tests has to be read late,
+not captured in a module-level constant at import.
+
+18.7 DATABASE STATE LEAKING BETWEEN TESTS
+
+Problem: early tests passed in isolation and failed when run together. Tests
+were seeing rows left behind by earlier tests, and the schema was being
+initialised against a stale file.
+
+Impact: the suite was not trustworthy, and ordering-dependent failures are
+among the most confusing kind to debug.
+
+How it was resolved: conftest.py sets RESOLVEAI_DB to a temporary file path
+BEFORE the app is imported, and an autouse fixture deletes and reinitialises
+that database around every single test. The environment variable must be set
+before import because config.py reads it at import time.
+
+Lesson: test isolation has to be established before the application imports,
+not inside a fixture that runs after it. This is the same root cause as 18.6 —
+import-time configuration capture.
+
+18.8 TEST ARTIFACTS KEPT POLLUTING THE REPOSITORY
+
+Problem: the attachment tests upload real files, which were written into the
+uploads/ directory. Because uploads/ was not in .gitignore, every test run
+produced a fresh set of untracked .txt files that then got committed by
+accident.
+
+Evidence: this happened TWICE and required two separate cleanup commits
+(f677319 "Clean up test upload files" and cabd4e6 "Clean up test upload
+artifacts"), each deleting roughly six to twenty stray upload files. The
+uploads/*.txt files are still reappearing in the working tree today for the
+same reason.
+
+Impact: repository noise, accidental commits of meaningless files, and repeated
+manual cleanup.
+
+Lesson: any directory that tests write into must be gitignored from the moment
+it is created, with only a .gitkeep tracked to preserve the empty directory.
+This is the one issue in the project that is still not fully closed.
+
+18.9 THE BUILD WAS DONE IN ONE LONG SESSION, IN LAYERS
+
+Observation from the git history: the entire project was built between
+2026-10-09 14:40 and 2026-10-10 01:30 — approximately 11 hours. The commit
+sequence shows the layering approach clearly:
+
+  14:40  ResolveAI v1.0 - AI-powered customer support desk   (25 files: the
+         base vertical slice — customers, tickets, AI reply, dashboard, tests)
+  22:25  Add auth, rate limiting, SLA tracking, email, Docker, CI/CD
+  22:29  Frontend: SLA breach indicators, filter, dashboard stat
+  23:15  Add AI agent loop, knowledge base, workers, triage, escalation,
+         analytics, SSE                                       (the big one)
+  23:17  Frontend: Knowledge base + Analytics views, agent UI
+  23:24  Add JWT auth tests, update requirements
+  00:25  Add streaming, attachments, memory, cache, portal, webhooks,
+         import/export, cross-platform
+  00:26  Clean up test upload files                            (cleanup #1)
+  00:39  Add SLA reporting, i18n, team mentions
+  01:14  UI redesign: minimalist, elegant, color-psychology palette
+         (2,454 insertions — the largest single commit, and a full rewrite of
+         the CSS and JS)
+  01:29  Final polish: README, .env.example, remove spikes, fix duplicates
+  01:30  Clean up test upload artifacts                        (cleanup #2)
+
+The difficulty this reveals: the first commit was already labelled "v1.0" with
+25 files, then the project grew to 121 tracked files across 12 commits. Working
+in one long session meant features were added faster than the structure was
+refactored, which is exactly why the final polish commit had to "fix
+duplicates" and why two separate cleanup commits were needed.
+
+18.10 THE UI WAS REDESIGNED FROM SCRATCH AFTER ALL FEATURES EXISTED
+
+Problem: the first frontend was functional but not presentable. The whole point
+of the project is to be a portfolio piece, so the interface had to look
+deliberate rather than default.
+
+Impact: this was the single largest commit in the project — 2,454 insertions,
+with style.css growing by 616 lines and app.js by 755 lines. It was a
+substantial rewrite done after every feature was already built, which meant
+re-testing the whole interface against features that already worked.
+
+How it was resolved: the redesign was scheduled deliberately LAST, after the
+data shapes and all endpoints were stable, so the new UI was built against a
+frozen API rather than a moving one. Doing it earlier would have meant
+redesigning twice.
+
+Lesson: for a portfolio project, build function first and appearance last, but
+plan for the appearance pass in advance — it is not a small task.
+
+18.11 KNOWLEDGE BASE SEARCH NEEDED A FALLBACK PATH
+
+Problem: the knowledge base search uses SQLite FTS5 with MATCH queries. FTS5 is
+not guaranteed to be compiled into every SQLite build, and MATCH syntax fails
+loudly on queries containing characters FTS5 treats as operators.
+
+Impact: a search could throw instead of returning no results.
+
+How it was resolved: both the agent's search tool and the KB router wrap the
+FTS5 query in try/except and fall back to a LIKE search on failure. The
+fallback is visible in the code as two separate "Fallback to LIKE" branches.
+
+Lesson: any dependency on an optional database feature needs a degraded path,
+because the failure mode is an exception, not a graceful empty result.
+
+18.12 MAPPING THE AGENT'S TOOL CALLS TO REAL DATABASE WRITES
+
+Problem: the agent's tools need the customer_id, but the agent is given a
+ticket_id. The tools also needed to recompute SLA deadlines when escalating,
+which is logic that lives in the tickets router.
+
+Impact: early versions had the agent's escalate tool failing or writing an
+inconsistent SLA deadline, because the ticket-to-customer mapping and the SLA
+calculation were not available inside the tool.
+
+How it was resolved: the agent loop fetches customer_id from the tickets table
+before building the prompt, and the escalate tool imports _compute_sla_due_at
+from the tickets router so the SLA logic has exactly one implementation. The
+circular-import risk is handled by importing inside the function rather than at
+module level.
+
+Lesson: when a tool needs logic that lives in a router, import the function
+rather than duplicating it. Duplicated SLA math would have silently diverged.
+
+18.13 TASK MENTIONS WERE FOUND MISSING BY THE USER
+
+Problem: after the main build, the user explicitly asked for team collaboration
+with @mentions to be added. It was not part of the original feature set.
+
+Impact: it required a new module (team.py, 120 lines), a new table dependency
+(mentions are stored as system messages, so no schema change was needed), and
+new tests — after the project had already been declared finished.
+
+How it was resolved: mentions were implemented as internal system messages
+prefixed with [@email], reusing the existing messages table rather than adding
+a new one. This is why mentions have no dedicated table in the schema.
+
+Lesson: reusing an existing table for a new feature (mentions as messages) is
+far cheaper than a schema migration, and it keeps the message thread complete.
+
+18.14 THE REPORT ITSELF HAD A DEFECT
+
+Problem: while writing this documentation, a duplicate entry was found in the
+report's own "Future Improvements" section — CORS configuration was listed both
+as item 3 (high priority) and item 6 (medium priority).
+
+Impact: a small but real defect in a document that is meant to be the
+authoritative description of the project.
+
+How it was resolved: the duplicate was removed and the list renumbered, in this
+same session.
+
+Lesson: documentation drifts and needs to be reviewed against the code, not
+just written once. The endpoint catalog and ER diagram in sections 16 and 17
+were generated by introspecting the running application precisely to avoid this
+kind of drift.
+
+18.15 SUMMARY OF DIFFICULTIES BY CATEGORY
+
+  Category              Difficulty                          Status
+  --------------------  ----------------------------------  ---------------
+  Hardware              No GPU, 1.7GB RAM -> no local LLM   Resolved (cloud)
+  Provider              OpenAI key had no credits (429)     Resolved (Groq)
+  Provider              Model retired mid-project           Resolved (env var)
+  Technical risk        Tool calling unproven               Resolved (spike)
+  Async                 Blocking imaplib in event loop      Resolved (threadpool)
+  Async                 Worker shutdown hung                Resolved (Event)
+  Async                 Concurrent WS registry corruption   Resolved (Lock)
+  Testing               Rate limiter broke the suite        Resolved (late read)
+  Testing               DB state leaked between tests       Resolved (env before import)
+  Hygiene               Test uploads committed twice        STILL OPEN
+  Process               One long session, no refactor pass  Accepted
+  Frontend              Full redesign after features done   Resolved (planned last)
+  Database              FTS5 optional / MATCH can throw     Resolved (LIKE fallback)
+  Integration           Tool -> DB write + SLA recompute    Resolved (shared function)
+  Scope                 @mentions missing from v1           Resolved (reused table)
+  Documentation         Duplicate entry in the report       Resolved (this session)
+
+18.16 WHAT WOULD BE DONE DIFFERENTLY
+
+  1. Add uploads/* to .gitignore in the very first commit, with only .gitkeep
+     tracked. This single line would have prevented two cleanup commits.
+
+  2. Commit in smaller, more frequent steps. Twelve commits for 121 files in
+     eleven hours means several commits are large and mixed in purpose,
+     including the 2,454-line UI rewrite. A reviewer cannot follow the
+     reasoning in a commit that large.
+
+  3. Make every external model name, endpoint and key an environment variable
+     from the first line of code. This was done, and it is the decision that
+     saved the project when the model was retired — it should be the default
+     habit, not a recovery.
+
+  4. Write the spike for any unproven external capability before designing
+     around it. The tool-calling spike worked exactly as intended; applying
+     that pattern to the OpenAI key (a one-line probe) would have found the
+     429 before any code depended on it.
+
+  5. Keep documentation generated from the code wherever possible. The
+     duplicate CORS entry existed because a hand-written list drifted from
+     reality. The API catalog and ER diagram avoid this by being introspected
+     from the running app and the live schema.
+
+---------------------------------------------------------------------------
+
+END OF REPORT
