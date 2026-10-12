@@ -45,7 +45,7 @@ A production-ready customer support platform with AI-powered auto-replies, strea
 - Windows, Linux, macOS support
 - Docker and docker-compose
 - CI/CD with GitHub Actions (Python 3.10–3.13)
-- 214 tests covering all modules
+- 221 tests covering all modules
 
 ## Quick Start
 
@@ -142,7 +142,7 @@ resolveai/
 │   └── templates/            # HTML templates
 ├── public/
 │   └── sw.js                 # Service worker for push notifications
-├── tests/                    # 214 tests
+├── tests/                    # 221 tests
 ├── setup.sh / setup.bat      # Cross-platform setup
 ├── run.sh / run.bat          # Cross-platform run
 ├── Dockerfile
@@ -171,7 +171,7 @@ pip install pytest pytest-asyncio httpx
 pytest tests/ -v
 ```
 
-214 tests covering tickets, customers, AI agent, SLA, auth, KB, attachments, memory, streaming, notifications, presence, chat, and platform compatibility.
+221 tests covering tickets, customers, AI agent, SLA, auth, KB, attachments, memory, streaming, notifications, presence, chat, and platform compatibility.
 
 ## License
 

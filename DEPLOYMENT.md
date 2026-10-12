@@ -11,10 +11,20 @@
 
 | Platform | Status | Notes |
 |----------|--------|-------|
-| RHEL 9 / CentOS 9 | Fully tested | Use `setup.sh` |
-| Ubuntu 22.04+ | Fully tested | Use `setup.sh` |
-| Windows 10/11 | Fully tested | Use `setup.bat` |
-| macOS 13+ | Fully tested | Use `setup.sh` |
+| RHEL 9 / CentOS 9 | Tested | Use `setup.sh` |
+| Ubuntu 22.04+ | Tested | Use `setup.sh` |
+| Windows 10/11 | Supported, not executed on Windows | Use `setup.bat` |
+| macOS 13+ | Supported | Use `setup.sh` |
+
+The application is written to be OS-independent (no POSIX-only imports, all
+paths via `pathlib`, explicit UTF-8 on every text-mode file open, no compiled
+dependencies). Compatibility is enforced by `tests/test_platform.py`, which
+fails the build if any Windows-breakage pattern reappears.
+
+Honest caveat: the test suite and a fresh-clone run were verified on Linux. The
+Windows `.bat` scripts were reviewed and hardened but have not been executed on
+a real Windows host. If you run it on Windows, please confirm `setup.bat` and
+`run.bat` behave — see the migration guide below for what to check.
 
 ## Quick Start
 
