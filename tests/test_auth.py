@@ -134,3 +134,84 @@ def test_rate_limit_blocks_over_limit():
 
     # Next should fail
     assert _burst_check(client_key) is False
+
+
+# ─── Regression: middleware exceptions must become HTTP responses, not 500 ──
+# An HTTPException raised inside BaseHTTPMiddleware.dispatch bypasses FastAPI's
+# exception handlers and escapes the ASGI stack, so the client saw a 500.
+# These tests go through the real ASGI stack to catch that class of bug.
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_returns_429_not_500():
+    """Exceeding the rate limit must yield 429, never 500."""
+    from app import auth
+    from app import config
+    from app.database import init_db
+
+    await init_db()
+    auth._rate_store.clear()
+    auth._burst_store.clear()
+
+    # conftest disables rate limiting globally; re-enable it for this test only.
+    original_rpm = config.RATE_LIMIT_REQUESTS_PER_MINUTE
+    original_burst = config.RATE_LIMIT_BURST
+    config.RATE_LIMIT_REQUESTS_PER_MINUTE = 3
+    config.RATE_LIMIT_BURST = 2
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            codes = set()
+            for _ in range(20):
+                r = await ac.get("/api/customers/")
+                codes.add(r.status_code)
+                if r.status_code == 429:
+                    break
+    finally:
+        config.RATE_LIMIT_REQUESTS_PER_MINUTE = original_rpm
+        config.RATE_LIMIT_BURST = original_burst
+        auth._rate_store.clear()
+        auth._burst_store.clear()
+
+    assert 429 in codes, f"expected a 429, saw {codes}"
+    assert 500 not in codes, f"rate limiting produced a 500: {codes}"
+
+
+@pytest.mark.asyncio
+async def test_missing_api_key_returns_401_not_500():
+    """Missing API key must yield 401, never 500."""
+    from app import auth
+    from app.database import init_db
+
+    await init_db()
+    auth._rate_store.clear()
+    auth._burst_store.clear()
+    original = auth.API_KEY
+    auth.API_KEY = "regression-secret-key"
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.get("/api/customers/")
+        assert r.status_code == 401, f"expected 401, got {r.status_code}"
+    finally:
+        auth.API_KEY = original
+
+
+@pytest.mark.asyncio
+async def test_wrong_api_key_returns_403_not_500():
+    """Invalid API key must yield 403, never 500."""
+    from app import auth
+    from app.database import init_db
+
+    await init_db()
+    auth._rate_store.clear()
+    auth._burst_store.clear()
+    original = auth.API_KEY
+    auth.API_KEY = "regression-secret-key"
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.get("/api/customers/", headers={"X-API-Key": "nope"})
+        assert r.status_code == 403, f"expected 403, got {r.status_code}"
+    finally:
+        auth.API_KEY = original

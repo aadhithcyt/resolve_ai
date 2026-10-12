@@ -3,6 +3,7 @@ import time
 import hashlib
 import hmac
 from fastapi import Request, HTTPException, status
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .config import API_KEY
@@ -153,19 +154,34 @@ def _burst_check(client_key: str) -> bool:
 # ─── Middleware ─────────────────────────────────────────────────────────────
 
 class AuthMiddleware(BaseHTTPMiddleware):
-    """Middleware that enforces API key auth and rate limiting."""
+    """Middleware that enforces API key auth and rate limiting.
+
+    IMPORTANT: an HTTPException raised inside a BaseHTTPMiddleware.dispatch
+    does NOT get converted into a JSON error response by FastAPI's exception
+    handlers -- it propagates out of the ASGI stack and the client sees a bare
+    500 (or the connection dies). Exception handlers only apply to code running
+    INSIDE the router. So every auth/rate-limit rejection here must be returned
+    as an explicit JSONResponse, not raised.
+    """
 
     async def dispatch(self, request: Request, call_next):
-        # Verify API key
-        await verify_api_key(request)
+        # Verify API key (raises HTTPException -> converted here)
+        try:
+            await verify_api_key(request)
+        except HTTPException as exc:
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail},
+                headers=exc.headers,
+            )
 
         # Rate limiting (skip for health)
         if request.url.path != "/health":
             client_key = _get_client_key(request)
             if not _burst_check(client_key) or not _rate_limit_check(client_key):
-                raise HTTPException(
+                return JSONResponse(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail="Rate limit exceeded",
+                    content={"detail": "Rate limit exceeded"},
                     headers={"Retry-After": "60"},
                 )
 
